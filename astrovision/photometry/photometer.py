@@ -153,6 +153,7 @@ class Photometer:
                 source.photometry.flux, zero_point, source.photometry.flux_err)
             source.photometry.magnitude = float(magnitude)
             source.photometry.magnitude_err = float(magnitude_err)
+            source.photometry.zero_point = float(zero_point)
             source.photometry.surface_brightness = surface_brightness(
                 source.photometry.flux, max(source.morphology.area_pixels, 1),
                 pixel_scale, zero_point)

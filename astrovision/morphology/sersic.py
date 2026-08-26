@@ -9,7 +9,7 @@ so that is what this module does, with an optional 2-D refinement.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
@@ -37,6 +37,13 @@ class SersicFit:
     success: bool = False
     method: str = "none"
     n_points: int = 0
+    #: One-sigma marginal errors, keyed by parameter name.  Empty when the
+    #: fit did not reach a stage where a curvature estimate is meaningful.
+    errors: Dict[str, float] = dataclass_field(default_factory=dict)
+    #: The most degenerate parameter pair and its correlation coefficient.
+    #: For Sersic fits this is usually ``n`` against ``r_eff`` and it is
+    #: usually large, which is exactly the thing a bare ``n`` hides.
+    worst_correlation: Tuple[str, str, float] = ("", "", 0.0)
 
     @property
     def total_flux(self) -> float:
@@ -59,7 +66,11 @@ class SersicFit:
                 "position_angle": float(self.position_angle),
                 "background": float(self.background), "chi2": float(self.chi2),
                 "reduced_chi2": float(self.reduced_chi2), "success": bool(self.success),
-                "method": self.method, "total_flux": self.total_flux}
+                "method": self.method, "total_flux": self.total_flux,
+                "errors": {k: float(v) for k, v in self.errors.items()},
+                "worst_correlation": {
+                    "parameters": [self.worst_correlation[0], self.worst_correlation[1]],
+                    "value": float(self.worst_correlation[2])}}
 
 
 def fit_sersic_1d(radii: np.ndarray, intensity: np.ndarray,
@@ -193,18 +204,26 @@ def fit_sersic_2d(cutout: np.ndarray, centre: Optional[Tuple[float, float]] = No
         amplitude, r_eff, n, q, pa, sky = params
         return amplitude * shape_model(r_eff, n, q, pa) + sky
 
+    # The sky pedestal must be bounded by the *noise*, not by the spread of
+    # the data: a bright galaxy inflates the latter enormously, and a sky
+    # term free to roam that far simply eats the object's outer flux.
+    scale = float(noise) if np.isfinite(noise) and noise > 0 else _robust_noise(data, footprint)
+    weight = 1.0 / max(scale, 1e-9)
+
     def residual(params: np.ndarray) -> np.ndarray:
-        return (model(params) - data)[fit_region]
+        # Weighted by the noise, so the sum of squares really is a
+        # chi-squared.  For uniform noise this cannot move the solution --
+        # scaling every residual by a constant leaves the minimum where it
+        # was -- but it makes `reduced_chi2` mean what its name says, and it
+        # is what lets the curvature at the minimum be read as a parameter
+        # covariance rather than as a number in counts squared.
+        return (model(params) - data)[fit_region] * weight
 
     # A free sky pedestal matters: an over- or under-subtracted background
     # of even a fraction of the noise tilts the outer profile and drags the
     # Sersic index with it.
     guess = np.array([start.amplitude, start.r_eff, start.n,
                       float(axis_ratio), float(position_angle), 0.0], dtype=float)
-    # The sky pedestal must be bounded by the *noise*, not by the spread of
-    # the data: a bright galaxy inflates the latter enormously, and a sky
-    # term free to roam that far simply eats the object's outer flux.
-    scale = float(noise) if np.isfinite(noise) and noise > 0 else _robust_noise(data, footprint)
     # ``n`` and ``r_eff`` are strongly degenerate: a too-large radius can
     # always be compensated by a steeper index.  The half-light radius is
     # measured directly from the curve of growth and is, by definition,
@@ -243,11 +262,37 @@ def fit_sersic_2d(cutout: np.ndarray, centre: Optional[Tuple[float, float]] = No
 
     amplitude, r_eff, n, q, pa, sky = solution
     dof = max(int(fit_region.sum()) - 6, 1)
-    return SersicFit(amplitude=float(amplitude), r_eff=float(r_eff), n=float(n),
-                     axis_ratio=float(q), position_angle=float(pa % 180.0),
-                     background=float(sky), chi2=chi2, reduced_chi2=chi2 / dof,
-                     success=success, method=method,
-                     n_points=int(fit_region.sum()))
+    fit = SersicFit(amplitude=float(amplitude), r_eff=float(r_eff), n=float(n),
+                    axis_ratio=float(q), position_angle=float(pa % 180.0),
+                    background=float(sky), chi2=chi2, reduced_chi2=chi2 / dof,
+                    success=success, method=method,
+                    n_points=int(fit_region.sum()))
+    _attach_errors(fit, residual, solution, int(fit_region.sum()))
+    return fit
+
+
+#: Order of the parameters in the 2-D fit vector, for naming the errors.
+SERSIC_PARAMETERS = ("amplitude", "r_eff", "n", "axis_ratio", "position_angle",
+                     "background")
+
+
+def _attach_errors(fit: SersicFit, residual, solution: np.ndarray,
+                   n_points: int) -> None:
+    """Estimate parameter errors from the curvature at the solution.
+
+    Failures here are deliberately silent in the fit's *values*: an error bar
+    that could not be computed is reported as absent, not as zero, and the
+    fitted parameters stand either way.
+    """
+    from .uncertainty import covariance_errors
+    try:
+        errors = covariance_errors(residual, solution, SERSIC_PARAMETERS, n_points)
+    except (ValueError, np.linalg.LinAlgError, FloatingPointError) as exc:
+        log.debug("Sersic error estimate failed (%s)", exc)
+        return
+    fit.errors = {name: float(value) for name, value in
+                  zip(SERSIC_PARAMETERS, errors.errors) if np.isfinite(value)}
+    fit.worst_correlation = errors.worst_correlation()
 
 
 def _variable_projection_fit(shape_model, data: np.ndarray, region: np.ndarray,

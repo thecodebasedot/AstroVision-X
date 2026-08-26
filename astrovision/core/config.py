@@ -187,6 +187,8 @@ class MorphologyConfig(_Section):
     detect_spiral_arms: bool = True
     polar_bins: int = 128
     min_area_for_morphology: int = 12
+    uncertainty: bool = False          # bootstrap error bars; costs ~n_samples x
+    bootstrap_samples: int = 24
 
 
 @dataclass
@@ -199,6 +201,57 @@ class ClassificationConfig(_Section):
     min_confidence: float = 0.15
     use_embeddings: bool = True
     embedding_dim: int = 64
+    use_colours: bool = True           # fold the stellar locus into the decision
+    colour_weight: float = 0.8         # relative to the morphological answer
+
+
+@dataclass
+class MultiBandConfig(_Section):
+    """Forced photometry across filters and the colours derived from it."""
+
+    enabled: bool = True
+    detection_band: Optional[str] = None    # defaults to the first band given
+    aperture_arcsec: float = 1.6            # the colour aperture, not the total
+    annulus_arcsec: Tuple[float, float] = (5.0, 9.0)
+    homogenise_psf: bool = True
+    target_fwhm_arcsec: Optional[float] = None
+    use_kron: bool = False
+    min_colour_snr: float = 5.0
+    colour_pairs: Optional[List[Tuple[str, str]]] = None   # adjacent bands by default
+
+
+@dataclass
+class CalibrationConfig(_Section):
+    """Astrometric and photometric calibration against reference standards.
+
+    Both draw their reference catalog from the ``crossmatch`` backend, so
+    configuring one service serves all three uses.
+    """
+
+    astrometry: bool = False               # refit the WCS
+    photometry: bool = False               # refit the zero point
+    match_radius_arcsec: float = 5.0       # generous: the header may be wrong
+    min_matches: int = 8
+    rounds: int = 3
+    standard_radius_arcsec: float = 2.0
+    min_standards: int = 5
+    min_standard_snr: float = 20.0
+    reference_band: Optional[str] = None
+    colour_pair: Optional[Tuple[str, str]] = None
+
+
+@dataclass
+class CrossmatchConfig(_Section):
+    """Checking sources against external catalogs of known objects."""
+
+    backend: str = "none"                   # none | local | vizier | simbad
+    path: Optional[str] = None              # for the local backend
+    catalog: str = "I/355/gaiadr3"          # for VizieR
+    radius_arcsec: float = 2.0
+    max_field_radius_arcsec: float = 3600.0
+    timeout: float = 20.0
+    cache_dir: Optional[str] = None
+    cache_max_age_days: float = 30.0
 
 
 @dataclass
@@ -309,8 +362,11 @@ class AstroVisionConfig(_Section):
     detection: DetectionConfig = field(default_factory=DetectionConfig)
     segmentation: SegmentationConfig = field(default_factory=SegmentationConfig)
     photometry: PhotometryConfig = field(default_factory=PhotometryConfig)
+    multiband: MultiBandConfig = field(default_factory=MultiBandConfig)
     morphology: MorphologyConfig = field(default_factory=MorphologyConfig)
     classification: ClassificationConfig = field(default_factory=ClassificationConfig)
+    calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
+    crossmatch: CrossmatchConfig = field(default_factory=CrossmatchConfig)
     anomaly: AnomalyConfig = field(default_factory=AnomalyConfig)
     transient: TransientConfig = field(default_factory=TransientConfig)
     timeseries: TimeSeriesConfig = field(default_factory=TimeSeriesConfig)

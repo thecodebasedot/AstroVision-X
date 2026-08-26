@@ -78,6 +78,51 @@ def stellarity(source: Source, psf_fwhm: float,
     return float(np.clip(value, 0.0, 1.0))
 
 
+#: Largest shift, in log-odds, that the colour vote may apply.  1.2 lets it
+#: move the odds by about a factor of three -- enough to decide a case
+#: morphology left open, not enough to overturn one morphology settled.
+MAX_COLOUR_EVIDENCE = 1.2
+
+
+def combine_stellarity(morphological: float, colour: float,
+                       colour_weight: float = 0.8) -> float:
+    """Fuse a morphological and a colour point-source probability.
+
+    The two are independent measurements of the same proposition, so they
+    combine in log-odds rather than by averaging.  That matters because
+    averaging cannot express agreement: two independent 0.8s should give
+    something above 0.8, and an average never does.
+
+    Colour is down-weighted because it is a single scalar with real scatter,
+    where morphology draws on several size statistics.  The asymmetry falls
+    out on its own at faint magnitudes: :func:`stellarity` already pulls its
+    own answer toward 0.5 as signal-to-noise drops, so colour comes to
+    dominate exactly where size measurements stop meaning anything.
+
+    >>> round(combine_stellarity(0.8, 0.8), 3) > 0.8
+    True
+    >>> round(combine_stellarity(0.5, 0.5), 3)
+    0.5
+    """
+    if not np.isfinite(colour):
+        return float(morphological)
+    if not np.isfinite(morphological):
+        return float(colour)
+
+    def logit(value: float) -> float:
+        clipped = float(np.clip(value, 1e-4, 1 - 1e-4))
+        return float(np.log(clipped / (1.0 - clipped)))
+
+    # Capped, because colour is corroborating evidence and not overriding
+    # evidence.  Uncapped, a single noisy colour can overturn four agreeing
+    # size measurements on a bright, obviously-stellar source -- and measured
+    # against truth that is exactly what it did, flipping confident correct
+    # answers while adding nothing to the uncertain ones it was meant to help.
+    evidence = float(np.clip(float(colour_weight) * logit(colour),
+                             -MAX_COLOUR_EVIDENCE, MAX_COLOUR_EVIDENCE))
+    return float(1.0 / (1.0 + np.exp(-(logit(morphological) + evidence))))
+
+
 def field_reference(catalog: SourceCatalog, psf_fwhm: float) -> Dict[str, float]:
     """Median properties of the field's resolved sources.
 
@@ -109,11 +154,21 @@ def field_reference(catalog: SourceCatalog, psf_fwhm: float) -> Dict[str, float]
 
 def classify_source(source: Source, psf_fwhm: float, psf_r90: Optional[float] = None,
                     threshold: float = 0.5, pixel_scale: float = 1.0,
-                    reference: Optional[Dict[str, float]] = None
+                    reference: Optional[Dict[str, float]] = None,
+                    colour_weight: float = 0.8
                     ) -> Tuple[ObjectClass, float, Dict[str, float]]:
-    """Assign an object class with a confidence and per-class scores."""
+    """Assign an object class with a confidence and per-class scores.
+
+    When the source carries a ``colour_stellarity`` -- written by
+    :func:`astrovision.classify.colours.annotate_catalog` from the field's
+    own stellar locus -- it is fused with the morphological answer.  Set
+    ``colour_weight`` to 0 to ignore colour entirely.
+    """
     morphology = source.morphology
-    point_like = stellarity(source, psf_fwhm, psf_r90)
+    shape_like = stellarity(source, psf_fwhm, psf_r90)
+    colour_like = float(source.meta.get("colour_stellarity", float("nan")))
+    point_like = (combine_stellarity(shape_like, colour_like, colour_weight)
+                  if colour_weight > 0 else shape_like)
     area = morphology.area_pixels
     surface_brightness = source.photometry.surface_brightness
 
@@ -191,4 +246,7 @@ def classify_source(source: Source, psf_fwhm: float, psf_r90: Optional[float] = 
                                    0.0, 0.99))
     scores = {names[i]: float(probabilities[i]) for i in order}
     scores["stellarity"] = float(point_like)
+    scores["shape_stellarity"] = float(shape_like)
+    if np.isfinite(colour_like):
+        scores["colour_stellarity"] = float(colour_like)
     return ObjectClass(best), confidence, scores

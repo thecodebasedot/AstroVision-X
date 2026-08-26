@@ -47,6 +47,29 @@ for line in analysis.statistics["narrative"]["priority_text"][:3]:
     print(line)
 ```
 
+```python
+# Several filters of the same sky, and a check against what is already known
+from astrovision import Pipeline
+from astrovision.core.config import AstroVisionConfig
+from astrovision.simulate import SkyConfig, SkySimulator
+from astrovision.preprocess import Preprocessor
+
+images, truth = SkySimulator(SkyConfig(seed=7)).generate_multiband(("g", "r", "i"))
+bands = {name: Preprocessor().run(image) for name, image in images.items()}
+
+config = AstroVisionConfig()
+config.crossmatch.backend = "vizier"          # or "local" with a path, or "none"
+config.crossmatch.cache_dir = ".astrovision-cache"
+config.calibration.astrometry = True
+config.calibration.photometry = True
+
+analysis = Pipeline(config).run(bands["r"], bands=bands, preprocess=False)
+for source in analysis.catalog:
+    if "known" in source.flags:
+        known = source.meta["known_object"]
+        print(f"source {source.id} is {known['name']}, a {known['described_type']}")
+```
+
 ---
 
 ## What it does
@@ -147,6 +170,27 @@ for line in analysis.statistics["narrative"]["priority_text"][:3]:
 | Spiral arms | Fourier modes in log-polar space, confirmed by phase winding |
 | Bars | The same `m = 2` mode, distinguished by *constant* phase |
 
+### Multiple filters
+
+| Task | Method |
+| --- | --- |
+| Forced photometry | One aperture, defined once, applied at the same *sky* position in every band |
+| Seeing homogenisation | Every band convolved to the worst PSF in the set, in arcsec |
+| Colours | Recorded only when both bands clear a signal-to-noise floor; one-sided limits otherwise |
+| Stellar locus | Fitted from the field's own point sources, not from a table |
+| Colour classification | Likelihood ratio between two field-calibrated populations |
+
+### Calibration
+
+| Task | Method |
+| --- | --- |
+| Plate solution | Iterative mutual-nearest matching, then a linear fit in the tangent plane |
+| Distortion | SIP forward coefficients, inverse by fixed-point iteration |
+| Zero point | Robust fit against catalogued standards, with a colour term |
+| Known objects | One cone search per field against Gaia / SIMBAD / a local file |
+| Uncertainty | Parameter covariance from the fit; parametric bootstrap for the rest |
+| Probabilities | Isotonic or Platt calibration, chosen by how much labelled data there is |
+
 ### Discovery
 
 | Search | Method |
@@ -174,6 +218,10 @@ bad columns. They are *not* claims about real survey data.
 | PSF FWHM recovery | 6 % median error |
 | Sérsic index recovery | 11 % median error |
 | Star/galaxy separation | 90 % (100 % for galaxies at S/N > 10) |
+| Multi-band colour accuracy | −0.009 mag bias, 0.060 mag scatter at S/N > 15 |
+| Astrometric solution | 3.5″ header error → 0.047″, 0.110″ rms |
+| Photometric zero point | 24.987 ± 0.002 against a true 25.000 |
+| Probability calibration | expected calibration error 0.112 → 0.027 |
 | Galaxy morphology (5 classes) | 59 % exact, 78 % at family level |
 | Transient recall | 12/14, with 2 spurious over five fields |
 | Strong-lens recall | 8/14, with 3 false positives over five fields |
@@ -183,8 +231,20 @@ bad columns. They are *not* claims about real survey data.
 Known limits, stated plainly: nebula and star-cluster classification is weak
 (they overlap galaxies in every measured statistic); the PSF is unreliable in
 fields where galaxies outnumber stars several to one, and the pipeline warns
-when that happens; and single-band lens searching cannot use the colour
-information real searches rely on.
+when that happens; formal photometric errors run about 2.5 times too small,
+because they count photon and read noise but not sky estimation, blending or
+PSF-matching residuals; and Sérsic fits are effectively degenerate in
+`n` against `r_eff`, which is why they carry a correlation and a flag rather
+than a bare index.
+
+Colour is the case worth spelling out. Adding it to star/galaxy separation
+changes 93.9 % to 93.7 % — one object in 442, which is to say nothing. At
+this depth the colour errors are comparable to how far galaxies sit off the
+stellar locus, so there is little to learn, and the machinery says so: it
+measures its own separation on each field and weights itself accordingly,
+down to zero. In a deeper variant the same code gives 94.1 % → 95.1 %. The
+capability is there and self-gating; the honest claim today is that it costs
+nothing and will pay off with better photometry.
 
 ---
 

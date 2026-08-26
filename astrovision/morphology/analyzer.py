@@ -14,6 +14,7 @@ from .cas import asymmetry, smoothness
 from .classify import classify_morphology
 from .gini_m20 import bulge_statistic, gini_m20, merger_statistic
 from .sersic import fit_sersic
+from .uncertainty import annotate_uncertainty, bootstrap_morphology
 from .segmentation import petrosian_segmentation
 from .spiral import detect_bar, detect_spiral_arms
 
@@ -101,6 +102,16 @@ class MorphologyAnalyzer:
                 extras["bulge_statistic"] = bulge_statistic(
                     source.morphology.gini, source.morphology.m20)
 
+            if cfg.uncertainty and local_noise > 0:
+                # Error bars come from re-measuring on noise realisations, so
+                # this genuinely costs `bootstrap_samples` times the shape
+                # measurement -- which is why it is off by default rather
+                # than quietly making every run an order of magnitude slower.
+                errors = bootstrap_morphology(
+                    cut, local_noise, centre, footprint,
+                    n_samples=cfg.bootstrap_samples, seed=source.id)
+                annotate_uncertainty(source, errors)
+
             axis_ratio = self._axis_ratio(source)
             if cfg.fit_sersic:
                 fit = fit_sersic(cut, centre, footprint, axis_ratio,
@@ -113,6 +124,8 @@ class MorphologyAnalyzer:
                     source.morphology.sersic_index = fit.n
                     source.morphology.effective_radius = fit.r_eff
                     source.meta["sersic"] = fit.to_dict()
+                    if abs(fit.worst_correlation[2]) > 0.95:
+                        source.add_flag("degenerate_sersic_fit")
 
             if cfg.detect_spiral_arms and source.morphology.area_pixels >= 40:
                 max_radius = min(reach, 0.48 * min(cut.shape))

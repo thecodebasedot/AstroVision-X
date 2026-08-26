@@ -11,6 +11,7 @@ from ..core.exceptions import ConfigError
 from ..core.logging import get_logger
 from ..core.types import ObjectClass, SourceCatalog
 from ..io.image import AstroImage
+from .colours import annotate_catalog
 from .rules import classify_source, field_reference
 
 log = get_logger("classify.classifier")
@@ -71,18 +72,33 @@ class Classifier:
         pixel_scale = image.pixel_scale if image.wcs is not None else 1.0
 
         reference = field_reference(catalog, psf_fwhm)
-        n_rules = 0
-        if cfg.backend in ("rules", "hybrid"):
+
+        def apply_rules(colour_weight: float) -> int:
+            count = 0
             for source in catalog:
                 object_class, confidence, scores = classify_source(
                     source, psf_fwhm, psf_r90, cfg.star_galaxy_threshold, pixel_scale,
-                    reference)
+                    reference, colour_weight)
                 source.object_class = object_class
                 source.class_confidence = confidence
                 source.class_scores = scores
                 if confidence < cfg.min_confidence:
                     source.add_flag("uncertain_class")
-                n_rules += 1
+                count += 1
+            return count
+
+        n_rules = 0
+        locus = None
+        if cfg.backend in ("rules", "hybrid"):
+            # Pass one is morphology alone.  It is not wasted work: its
+            # `shape_stellarity` is what tells the locus fit which sources are
+            # point-like, and a locus seeded by a colour-informed answer would
+            # be confirming its own conclusion.
+            n_rules = apply_rules(0.0)
+            if cfg.use_colours and any(source.bands for source in catalog):
+                locus = annotate_catalog(catalog)
+                if locus is not None and locus.information_weight > 0:
+                    apply_rules(float(cfg.colour_weight) * locus.information_weight)
 
         n_model = 0
         if cfg.backend in ("cnn", "ml", "hybrid"):
@@ -112,6 +128,7 @@ class Classifier:
             "psf_fwhm": psf_fwhm,
             "field_reference": reference,
             "n_rule_classified": n_rules,
+            "stellar_locus": locus.to_dict() if locus is not None else None,
             "n_model_overrides": n_model,
             "class_counts": counts,
             "n_uncertain": sum(1 for s in catalog if "uncertain_class" in s.flags),

@@ -145,6 +145,8 @@ def rank_candidates(analysis: FieldAnalysis, limit: int = 20) -> List[PriorityIt
                          "series is needed to establish a period reliably."],
                 evidence={"variability": source.variability_score}))
 
+    _apply_known_object_demotion(items, catalog)
+
     # Several stages can flag the same object; keep its strongest case and
     # record that the evidence was corroborated, which matters for ranking.
     merged: Dict[tuple, PriorityItem] = {}
@@ -169,6 +171,53 @@ def rank_candidates(analysis: FieldAnalysis, limit: int = 20) -> List[PriorityIt
              "the follow-up threshold)",
              len(ranked), len(items), len(merged) - len(worth_it))
     return ranked
+
+
+#: How much a match to a known object reduces each kind of candidate's
+#: priority.  Novelty claims are hit hardest because a catalogued object is
+#: precisely what an anomaly search is meant to exclude; a transient is
+#: barely touched, because a supernova going off in a known galaxy is the
+#: normal case, not a reason for suspicion.
+KNOWN_OBJECT_DEMOTION = {
+    "anomaly": 0.25,
+    "lens": 0.60,
+    "variable": 0.70,
+    "source": 0.60,
+    "transient": 0.95,
+}
+
+
+def _apply_known_object_demotion(items: List[PriorityItem], catalog) -> None:
+    """Down-weight candidates that match a catalogued object.
+
+    A discovery claim rests on the object not already being known, so this is
+    not cosmetic ranking: an anomaly search with no external check returns
+    the field's catalogued variable stars, and ranks them at the top because
+    they genuinely are unusual.
+
+    The demotion is applied *before* merging, so an object flagged by several
+    stages is demoted once per kind at the rate that kind deserves.  Nothing
+    is removed -- a known object can still be the most interesting thing in
+    the frame, and hiding it would be its own kind of dishonesty.
+    """
+    for item in items:
+        if item.source_id is None:
+            continue
+        source = catalog.by_id(item.source_id)
+        known = None if source is None else source.meta.get("known_object")
+        if not known:
+            continue
+        factor = KNOWN_OBJECT_DEMOTION.get(item.kind, 0.6)
+        item.score *= factor
+        name = known.get("name") or known.get("catalog") or "a catalogued object"
+        item.reasons.append(
+            f"matches {name} ({known.get('described_type', 'object')}) "
+            f"{known.get('separation_arcsec', float('nan')):.1f}\" away")
+        item.caveats.append(
+            "This position is already catalogued, so it is not a new object; "
+            "any claim here is about its behaviour, not its existence.")
+        item.evidence["known_object_separation"] = float(
+            known.get("separation_arcsec", float("nan")))
 
 
 def _transient_score(candidate: TransientCandidate) -> float:

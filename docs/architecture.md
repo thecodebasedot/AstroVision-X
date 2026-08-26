@@ -27,11 +27,13 @@ provenance and any warnings. This is what the reporters render.
 ## Stage order, and why it is fixed
 
 ```
-preprocess → detect → photometry → segmentation → morphology
-           → classification → embeddings → anomaly → lensing
+preprocess → detect → photometry → [calibration] → [multiband]
+           → segmentation → morphology → classification → [crossmatch]
+           → embeddings → anomaly → lensing
            → [transient → timeseries] → clustering → statistics → assistant
 ```
 
+Stages in brackets run only when configured or when the data supports them.
 The order is not arbitrary; each dependency is real.
 
 - **Detection needs preprocessing** because a detection threshold is only
@@ -41,8 +43,24 @@ The order is not arbitrary; each dependency is real.
 - **Morphology needs photometry** because the Sérsic fit is pinned by the
   measured half-light radius and the fit region is scaled to the object's own
   size. Without that, the index–radius degeneracy makes the fit run away.
+- **Calibration needs photometry** because a zero point is fitted to
+  instrumental magnitudes, and it comes *before* the multi-band pass so that
+  the colours are differences of calibrated magnitudes rather than of
+  detector counts.
+- **Forced photometry needs the detection band's apertures**, which is the
+  entire point: one aperture, defined once, applied at the same sky position
+  in every band. Detecting independently in each band gives each one its own
+  centroid and its own Kron radius, and the difference of two such magnitudes
+  is not a colour.
 - **Classification needs morphology** because a confident morphological type is
-  itself evidence that a source is a galaxy.
+  itself evidence that a source is a galaxy; it needs the multi-band pass
+  because the stellar locus is fitted from colours, and it runs its rules
+  *twice* — once on morphology alone to seed the locus fit, then again with
+  colour folded in. A locus seeded by a colour-informed answer would be
+  confirming its own conclusion.
+- **The known-object crossmatch comes after classification** and before the
+  anomaly ranking, because what it changes is the priority of a *candidate*:
+  an outlier that is already catalogued is not a discovery.
 - **The lensing search needs classification** because it only examines objects
   massive and early-type enough to lens; searching every source for arcs
   produces mostly false positives.
@@ -50,7 +68,11 @@ The order is not arbitrary; each dependency is real.
   stages and explain the ranking.
 
 The two time-domain stages run only when a multi-epoch series is supplied.
-Everything else runs on a single image.
+The multi-band stage runs only when other filters are passed to `run(bands=…)`.
+Calibration and crossmatch run only when a reference-catalog backend is
+configured; the default is `none`, and a run without one records that
+*nothing in the field has been shown to be previously unknown* rather than
+letting silence read as a clean check.
 
 ## Failure is contained
 

@@ -150,6 +150,150 @@ more diffuse, or brighter and granular — which keeps them independent of the
 zero point and the exposure depth. They remain the weakest part of the
 classifier, because they genuinely overlap galaxies in every measured statistic.
 
+## Colours, and the stellar locus
+
+Morphology answers "is this resolved?" and answers it well when the object is
+bright. It stops working exactly where survey catalogs get interesting — near
+the detection limit, where a small galaxy and a star are both a few pixels of
+noise-dominated light and every size statistic collapses onto the same value.
+
+Colour does not degrade the same way, because it is not a size measurement.
+Stars are approximately blackbodies behind the same filters, so their colours
+fall on a one-parameter curve, the **stellar locus**. Galaxies are integrated,
+redshifted stellar populations and sit off it.
+
+Three decisions carry that idea into something usable.
+
+**The locus is fitted from the field itself**, not taken from a table. That
+makes the test independent of the zero point, the filter's exact throughput,
+and any reddening common to the field — all of which move the locus bodily
+without changing the fact that stars lie on it. Morphological stellarity seeds
+the fit, and the seed is deliberately the *unfused* value: a locus seeded by
+its own output would confirm itself.
+
+**The widths are fitted from the field too**, and for a harder reason. The
+test compares how far a source sits off the locus against how far it could sit
+off it by chance, so it needs that second number. Formal photometric errors
+are not it — measured against truth they come out about 2.5 times too small,
+because they count photon and read noise but not sky estimation, blending, or
+the residual of matching one band's PSF to another. Both populations' widths
+are therefore measured directly, in signal-to-noise bins, from the field's own
+point-like and resolved sources.
+
+**The test is a likelihood ratio, not a sigmoid.** This is the decision the
+whole thing turns on. A sigmoid of the locus offset saturates near 1 for every
+small offset, so a test with no discriminating power votes "star" for
+everything — including the galaxies it exists to catch. Comparing two
+hypotheses instead makes an uninformative test return 0.5 on its own, which
+carries no weight when it is fused with morphology in log-odds. Both
+hypotheses are mixed with a broad outlier component, because the Rayleigh tail
+is far too thin for real data: a blended star lands five sigma out and would
+otherwise be convicted with certainty.
+
+Finally the fusion weight is not a constant. Each field measures how well its
+own colour test separates the morphological classes, and weights it
+accordingly — to zero when the answer is chance. A weak, noisy vote added at
+full strength to a strong one costs accuracy in every field where the colours
+happen to be poor, and no single constant can be right for both a shallow
+two-band field and a deep five-band one.
+
+## Forced photometry
+
+A colour is a *difference of magnitudes measured the same way*, and almost
+everything that goes wrong with colours goes wrong because that condition was
+quietly broken. Three ways, three fixes:
+
+- **Different apertures.** Detecting independently in each band gives each one
+  its own centroid and Kron radius, so the two apertures sample different parts
+  of the same galaxy. One aperture, defined once in the detection band, is
+  applied at the same *sky* position everywhere.
+- **Different seeing.** A fixed aperture catches more of a point source in good
+  seeing than in bad, so a star observed in 1.0" and 1.6" acquires a colour it
+  does not have. Every band is convolved to the worst PSF in the set — blurring
+  is stable, sharpening is not. Each band is then corrected by the enclosed
+  energy of its own *post-matching* PSF, because a Gaussian kernel applied to a
+  Moffat leaves something that is not quite either.
+- **Different pixel grids.** Apertures are specified in arcseconds and
+  converted per band.
+
+A colour is recorded only when both bands clear a signal-to-noise floor. A
+source detected at 40σ in the red and 1σ in the blue does not have a faint blue
+measurement; it has noise, and left in, such values dominate the scatter of any
+colour cut. What it does have is a one-sided limit — it is at least that red —
+and that is what gets stored.
+
+## Calibration
+
+The WCS that comes with a file is a starting guess. Pointing models are
+imperfect, focal planes flex, and a telescope reporting its position to an
+arcsecond is doing well. The plate solution matches detections to reference
+stars under the current guess, fits, then re-matches with a radius drawn from
+that fit's own residual and refits. Matching is *mutual*-nearest: one-sided
+matching quietly assigns several detections to one bright reference star in a
+crowded field, and those duplicated pairs pull the fit toward that one star.
+
+Distortion is handled by SIP coefficients applied, per the convention, to the
+offset from the reference pixel and *before* the linear matrix. Getting that
+order wrong is the classic SIP bug: applied to absolute pixel coordinates it
+leaves an error that grows across the detector and looks exactly like a bad
+plate scale. The inverse is found by fixed-point iteration rather than by
+requiring reverse coefficients, which many real headers do not carry.
+
+A zero point is fitted as `m_catalog = m_instrumental + zp + k·colour`. The
+colour term is not optional refinement: a filter is never exactly the reference
+survey's filter, so the offset between systems depends on the shape of the
+source's spectrum. Fitting only a constant leaves that dependence in the
+residuals, where it becomes a systematic, colour-dependent error in every
+magnitude. It is fitted only when the standards span enough colour to
+constrain it — a slope fitted to points all at the same colour returns a large
+coefficient with a small formal error, which is the worst possible pairing.
+
+## Knowing what is already known
+
+Everything this package calls a *candidate* rests on one unstated claim: that
+the object is not already known. Without checking, an anomaly ranking is a
+list of the field's oddest objects, which is a different thing and is mostly
+catalogued variable stars, asteroids on their published ephemerides, and
+galaxies someone measured in 1991.
+
+One cone covering the whole image is fetched once and matched locally — the
+other way round is one HTTP request per source, which is slow for the caller
+and rude to a service that is free to use. The backend is pluggable and the
+default does nothing, so a pipeline never silently stalls on an unreachable
+service; a local reference file works with no network at all.
+
+The report distinguishes three states a naive implementation conflates:
+*checked and matched*, *checked and not matched*, and *not checked* — where
+the last includes a cone that came back empty, which establishes nothing.
+Matched sources keep every measurement and lose their claim to novelty: an
+anomaly is demoted by a factor of four, a transient barely at all, because a
+supernova going off in a known galaxy is the normal case rather than a reason
+for suspicion.
+
+## Uncertainty
+
+A Sérsic index of 3.8 means something entirely different at ±0.2 than at ±2.1,
+and at moderate signal-to-noise the second is the common case.
+
+Fitted parameters get their errors from the curvature of the fit's own
+chi-squared surface, scaled by the achieved chi-squared — the formal errors
+assume the model is correct and the noise estimate exact, and a real galaxy is
+not a Sérsic profile. What matters more than the marginal errors is the
+*correlation*: these fits are effectively degenerate in `n` against `r_eff`,
+so a source whose worst pair correlates above 0.95 carries a flag saying so.
+
+The non-parametric statistics have no Jacobian, so their errors come from
+re-measuring the object on repeated noise realisations at the image's own
+measured noise. This also exposes bias, not just scatter: asymmetry is built
+from absolute differences, so noise pushes it upward whichever way the noise
+goes, by about 0.13 in a typical faint source.
+
+Classifier confidences are numbers between 0 and 1, which does not make them
+probabilities. Isotonic regression or Platt scaling — chosen by how much
+labelled data there is, since isotonic overfits below a few hundred points —
+maps them to values that mean what they say. Platt scaling belongs on the
+log-odds scale; applied to probabilities directly it makes calibration worse.
+
 ## Difference imaging
 
 Subtraction removes every constant source and leaves what changed. Getting it

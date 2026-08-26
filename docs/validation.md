@@ -180,6 +180,166 @@ answer. Nebulae (1/6) and star clusters (4/12) remain weak.
 
 Tests: `TestClassification::test_separates_stars_from_galaxies`.
 
+## Multi-band colours
+
+**Setup.** 260 × 260 three-band fields (g, r, i) with per-band seeing of
+1.44", 1.28" and 1.36", five seeds. Colours are measured by forced
+photometry in a 1.6" aperture at the r-band positions, after every band is
+convolved to the worst seeing in the set. 264 matched objects above S/N 15.
+
+**Result.** g−r bias **−0.009 mag**, scatter **0.060 mag**.
+
+The bias depends on how the bands' seeing differs, and finding that out
+required a controlled test:
+
+| Seeing | Without aperture correction | With it |
+| --- | --- | --- |
+| All bands equal | +0.003 ± 0.010 | −0.016 ± 0.010 |
+| g worst (1.56") | **+0.035** ± 0.007 | −0.001 ± 0.007 |
+| r worst (1.56") | −0.034 ± 0.012 | −0.029 ± 0.012 |
+
+Matching a Moffat PSF to a wider Moffat with a Gaussian kernel does not
+reproduce the wings exactly, so a fixed aperture still catches slightly
+different fractions per band. Correcting each band by the enclosed energy of
+its own post-matching PSF removes the largest case entirely. Two bugs
+surfaced here: the matched PSF *model* was carrying the unconvolved stamp
+while claiming the widened FWHM, and colours were being recorded for sources
+detected at 40σ in one band and 1σ in the other — the latter alone inflated
+the star colour scatter from 0.10 to 0.37 mag.
+
+**Limit.** Formal photometric errors are about **2.5× too small**: measured
+per-axis colour scatter for stars is 0.083 mag where the formal errors say
+0.033. They count photon and read noise but not sky estimation, blending, or
+PSF-matching residuals. Nothing downstream uses them as if they were right.
+
+Tests: `tests/test_multiband.py`.
+
+## Colour-based star/galaxy separation
+
+**Setup.** As above, 442 matched stars and galaxies over five seeds.
+
+**Result.** Morphology alone **93.9 %**; with colour **93.7 %** — a
+difference of one object, which is to say no difference.
+
+That is the honest outcome and it is worth stating plainly: at this depth
+the colour test carries almost no star/galaxy information. Its measured
+separation (ROC area against the morphological labels) is 0.70, which the
+field-calibrated weighting turns into a colour weight of 0.38. In a deeper
+variant (lower sky, lower read noise) the same machinery gives 94.1 % → 95.1 %.
+
+Getting to "no difference" took four corrections, each caught by measurement:
+
+1. A one-sided sigmoid of the locus offset returned ≈0.85 for *everything*,
+   including galaxies — an uninformative test that voted "star" for all of
+   it. Replacing it with a likelihood ratio between two calibrated
+   populations makes an uninformative test return 0.5 on its own. Before:
+   94.1 % → 84.6 %.
+2. The widths were taken from formal errors, which are 2.5× too small (above).
+   Calibrating both populations' widths from the field itself, in
+   signal-to-noise bins, fixed that.
+3. The Rayleigh tail is far too thin for real data: a blended star lands five
+   sigma off the locus and gets convicted with certainty. A 5 % outlier
+   component in both hypotheses stopped that.
+4. Sources fainter than the calibrated range were being judged against widths
+   measured on brighter ones. They are now given no colour vote at all.
+
+| Signal-to-noise bin | Star width | Galaxy width | Usable? |
+| --- | --- | --- | --- |
+| ~11 | 0.092 | 0.094 | no — noise dominates |
+| ~46 | 0.050 | 0.108 | yes |
+| ~166 | 0.028 | 0.083 | yes |
+
+Tests: `TestStellarLocus`, particularly
+`test_an_uninformative_test_returns_one_half` and
+`test_colour_never_makes_classification_worse`.
+
+## Astrometric calibration
+
+**Setup.** 300 × 300 fields, five seeds. The header WCS is corrupted the way
+a real pointing error corrupts one: shifted 6.5 and −4.2 px, rotated 0.35°,
+and rescaled by 1.004. ~117 reference stars.
+
+**Result.** Corner error **3.51" → 0.047"**, fit rms **0.110"** from 82
+matched stars, in 5 of 5 fields. The solution recovers the injected rotation
+to 0.05° and the scale to 1 part in 10⁴.
+
+Mutual-nearest matching matters: one-sided matching assigns several
+detections to one bright reference star in a crowded field, and those
+duplicated pairs pull the fit. The solver refuses rather than returning a
+plate solution from fewer than 8 stars.
+
+## Photometric calibration
+
+**Setup.** As above, standards drawn from the injected star fluxes.
+
+**Result.** Zero point **24.987 ± 0.002** against a true 25.000, with 0.017
+mag scatter from 50 standards.
+
+The −0.013 mag offset is a **systematic six times the formal error** — it
+comes from the residual aperture correction, not from the standards — and it
+is exactly why the formal error on a zero point should not be quoted as its
+accuracy.
+
+## SIP distortion
+
+**Setup.** A 2048 × 2048 tangent plane with second-order SIP coefficients
+producing ~1" of distortion at the corners.
+
+**Result.** Pixel → sky → pixel round-trips to **4 × 10⁻¹⁰ px** using the
+iterative inverse, with no reverse coefficients needed. The header round-trip
+preserves the coefficients and stamps the `-SIP` suffix on `CTYPE`.
+
+## Known-object crossmatch
+
+**Setup.** 260 × 260 field, reference catalog built from the injected star
+positions, 1.5" match radius.
+
+**Result.** 84 of 113 detections match a known object. Matched sources are
+flagged, described in words ("variable star", "minor planet"), and demoted in
+the follow-up ranking — an anomaly by a factor of 4, a transient barely at
+all, since a supernova in a known galaxy is the normal case.
+
+The report distinguishes three states that a naive implementation conflates:
+*checked and matched*, *checked and not matched*, and *not checked* — the
+last including a cone that returned zero references, which establishes
+nothing about the field.
+
+## Morphological uncertainty
+
+**Setup.** Parametric bootstrap over 16–24 noise realisations at the image's
+own measured noise.
+
+**Result.** Errors scale with noise as they should; at 6× the noise every
+statistic's error grows by roughly 6×. The bootstrap also measures a **+0.13
+noise bias in asymmetry**, which is real: asymmetry is built from absolute
+differences, so noise pushes it up whichever way it goes.
+
+Sérsic parameter errors come from the curvature at the solution, scaled by
+the achieved chi-squared. On simulator galaxies the median error on *n* is
+**2.6**, against an actual median |n_fit − n_true| of 0.76 — the error bars
+are conservative. The median |correlation| of the worst parameter pair is
+**1.00**: these fits are effectively degenerate, which is the finding, and
+sources carry a `degenerate_sersic_fit` flag rather than a bare index that
+reads as well determined.
+
+Fixing this exposed that `reduced_chi2` was not a reduced chi-squared at all —
+the residual was unweighted, so the number was in counts squared.
+
+## Probability calibration
+
+**Setup.** A synthetic overconfident classifier (true log-odds multiplied by
+2.2), a 4000-point held-out test set.
+
+**Result.** Expected calibration error **0.112 → 0.027** with isotonic
+regression on 1000 training points; Platt scaling recovers the overconfidence
+slope to within 0.12 of its true value.
+
+Two corrections were needed. Platt scaling belongs on the **log-odds** scale,
+not on the probability — applied to probabilities directly it made the
+calibration error worse. And Newton's method without a line search diverges
+on near-separable validation sets: the fitted slope reached 3.8 × 10⁷,
+producing a calibrator that returns only 0 and 1.
+
 ## Transient detection
 
 **Setup.** Five multi-epoch series (five or six epochs, 2-day cadence),
@@ -306,7 +466,14 @@ backbone.
 
 - Real instrument signatures: fringing, scattered light, non-linearity,
   charge transfer inefficiency.
-- Real astrometric distortion beyond a TAN projection.
+- The VizieR and SIMBAD backends against the live services. Their URL
+  construction and response parsing are tested against recorded fixtures;
+  the transport is not, because a test suite that needs the network to pass
+  fails for reasons unrelated to the code.
+- Real astrometric distortion beyond TAN and second-order SIP.
+- Colours across genuinely different cameras, where the pixel grids and the
+  filter throughputs both differ. The code handles it; the simulator renders
+  every band on one grid, so the path is exercised but not stressed.
 - Crowded stellar fields at globular-cluster densities.
 - Any absolute photometric calibration against a standard system.
 - Whether the morphological classifier agrees with human classifiers on real
