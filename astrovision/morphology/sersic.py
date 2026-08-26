@@ -154,10 +154,6 @@ def fit_sersic_2d(cutout: np.ndarray, centre: Optional[Tuple[float, float]] = No
         return start
 
     optimize = try_import("scipy.optimize")
-    if optimize is None:
-        start.axis_ratio = float(axis_ratio)
-        start.position_angle = float(position_angle)
-        return start
 
     yy, xx = np.mgrid[0:ny, 0:nx]
     kernel = _compact_kernel(psf)
@@ -184,16 +180,18 @@ def fit_sersic_2d(cutout: np.ndarray, centre: Optional[Tuple[float, float]] = No
     if fit_region.sum() < 20:
         fit_region = footprint
 
-    def model(params: np.ndarray) -> np.ndarray:
-        amplitude, r_eff, n, q, pa, sky = params
+    def shape_model(r_eff: float, n: float, q: float, pa: float) -> np.ndarray:
+        """The profile shape at unit amplitude, before any sky is added."""
         theta = np.deg2rad(pa)
         xr = dx0 * np.cos(theta) + dy0 * np.sin(theta)
         yr = -dx0 * np.sin(theta) + dy0 * np.cos(theta)
         r = np.sqrt(xr ** 2 + (yr / max(q, 0.05)) ** 2)
-        rendered = sersic_profile(r, amplitude, max(r_eff, 0.3), float(np.clip(n, 0.2, 10.0)))
-        if kernel is not None:
-            rendered = convolve(rendered, kernel)
-        return rendered + sky
+        rendered = sersic_profile(r, 1.0, max(r_eff, 0.3), float(np.clip(n, 0.2, 10.0)))
+        return convolve(rendered, kernel) if kernel is not None else rendered
+
+    def model(params: np.ndarray) -> np.ndarray:
+        amplitude, r_eff, n, q, pa, sky = params
+        return amplitude * shape_model(r_eff, n, q, pa) + sky
 
     def residual(params: np.ndarray) -> np.ndarray:
         return (model(params) - data)[fit_region]
@@ -223,24 +221,100 @@ def fit_sersic_2d(cutout: np.ndarray, centre: Optional[Tuple[float, float]] = No
         np.array([np.inf, r_hi, 8.0, 1.0, 360.0, 3.0 * scale + 1e-6]),
     )
     guess = np.clip(guess, bounds[0] + 1e-9, bounds[1] - 1e-9)
-    try:
-        result = optimize.least_squares(
-            residual, guess, bounds=bounds, method="trf",
-            max_nfev=max_nfev, ftol=1e-3, xtol=1e-3, gtol=1e-3,
-            x_scale=np.array([max(abs(guess[0]), 1e-3), max(guess[1], 1.0), 1.0, 0.3, 45.0,
-                              max(scale, 1e-3)]))
-    except Exception as exc:  # pragma: no cover - optimiser edge cases
-        log.debug("2-D Sersic fit failed (%s); keeping the 1-D solution", exc)
-        return start
+    steps = np.array([max(abs(guess[0]), 1e-3) * 0.5, max(guess[1], 1.0) * 0.4,
+                      0.8, 0.2, 30.0, max(scale, 1e-3)])
 
-    amplitude, r_eff, n, q, pa, sky = result.x
+    if optimize is not None:
+        try:
+            result = optimize.least_squares(
+                residual, guess, bounds=bounds, method="trf",
+                max_nfev=max_nfev, ftol=1e-3, xtol=1e-3, gtol=1e-3,
+                x_scale=np.array([max(abs(guess[0]), 1e-3), max(guess[1], 1.0),
+                                  1.0, 0.3, 45.0, max(scale, 1e-3)]))
+            solution = np.asarray(result.x, dtype=float)
+            chi2 = float(np.sum(result.fun ** 2))
+            success = bool(result.success)
+            method = "least_squares_2d"
+        except Exception as exc:  # pragma: no cover - optimiser edge cases
+            log.debug("2-D Sersic fit failed (%s); keeping the 1-D solution", exc)
+            return start
+    else:
+        solution, chi2, success = _variable_projection_fit(
+            shape_model, data, fit_region, guess, bounds, max_nfev)
+        method = "variable_projection_2d"
+
+    amplitude, r_eff, n, q, pa, sky = solution
     dof = max(int(fit_region.sum()) - 6, 1)
-    chi2 = float(np.sum(result.fun ** 2))
     return SersicFit(amplitude=float(amplitude), r_eff=float(r_eff), n=float(n),
                      axis_ratio=float(q), position_angle=float(pa % 180.0),
                      background=float(sky), chi2=chi2, reduced_chi2=chi2 / dof,
-                     success=bool(result.success), method="least_squares_2d",
+                     success=success, method=method,
                      n_points=int(fit_region.sum()))
+
+
+def _variable_projection_fit(shape_model, data: np.ndarray, region: np.ndarray,
+                             guess: np.ndarray, bounds, max_nfev: int = 400):
+    """Fit without SciPy, by separating the linear parameters out.
+
+    The model is ``amplitude * shape(r_eff, n, q, pa) + sky``, which is
+    *linear* in amplitude and sky.  For any trial shape those two therefore
+    have a closed-form least-squares solution, leaving only four non-linear
+    parameters to search.  That conditions the problem far better than
+    descending on all six at once, which otherwise wanders into a wrong
+    basin and leaves the Sersic index badly biased.
+    """
+    lower, upper = bounds
+    target = data[region]
+    ones = np.ones_like(target)
+
+    def solve(r_eff: float, n: float, q: float, pa: float):
+        """Best amplitude and sky for this shape, and the residual sum."""
+        shape = shape_model(r_eff, n, q, pa)[region]
+        design = np.column_stack([shape, ones])
+        try:
+            coefficients, *_ = np.linalg.lstsq(design, target, rcond=None)
+        except np.linalg.LinAlgError:              # pragma: no cover - degenerate
+            return None, np.inf
+        amplitude = float(np.clip(coefficients[0], lower[0], upper[0]))
+        sky = float(np.clip(coefficients[1], lower[5], upper[5]))
+        residual = target - (amplitude * shape + sky)
+        return (amplitude, sky), float(np.sum(residual ** 2))
+
+    # Index into the parameter vector: r_eff, n, q, pa.
+    order = [1, 2, 3, 4]
+    current = np.clip(np.array(guess, dtype=float), lower, upper)
+    step = np.array([max(current[1] * 0.15, 0.5), 0.4, 0.12, 20.0], dtype=float)
+
+    linear, best = solve(current[1], current[2], current[3], current[4])
+    if linear is None:
+        return current, np.inf, False
+    current[0], current[5] = linear
+    evaluations = 1
+
+    for _ in range(24):
+        improved = False
+        for slot, index in enumerate(order):
+            for direction in (1.0, -1.0):
+                if evaluations >= max_nfev:
+                    return current, best, True
+                candidate = current.copy()
+                candidate[index] = float(np.clip(
+                    candidate[index] + direction * step[slot],
+                    lower[index], upper[index]))
+                if candidate[index] == current[index]:
+                    continue
+                linear, value = solve(candidate[1], candidate[2],
+                                      candidate[3], candidate[4])
+                evaluations += 1
+                if linear is not None and value < best - 1e-9:
+                    candidate[0], candidate[5] = linear
+                    current, best, improved = candidate, value, True
+                    break
+        if not improved:
+            step *= 0.5
+            if float(step[1]) < 5e-3 and float(step[0]) < 5e-3:
+                break
+    return current, best, True
 
 
 def _robust_noise(data: np.ndarray, footprint: Optional[np.ndarray] = None) -> float:

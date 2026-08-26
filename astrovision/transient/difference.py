@@ -55,26 +55,49 @@ class DifferenceResult:
 
 
 def flux_scale_factor(science: np.ndarray, reference: np.ndarray,
-                      mask: Optional[np.ndarray] = None) -> float:
+                      mask: Optional[np.ndarray] = None,
+                      n_sigma: float = 10.0) -> float:
     """Photometric ratio between two epochs, from their common bright pixels.
 
-    Exposure time, transparency and airmass all differ between epochs.  The
-    ratio is fitted on pixels that are bright in *both* frames, which are
-    dominated by the constant sources the subtraction must cancel.
+    Exposure time, transparency and airmass all differ between epochs, and
+    the ratio must be right to better than a percent: a one-percent error
+    leaves a one-percent residual at every star, which at a bright star is
+    many times the noise and looks exactly like a transient.
+
+    The estimator is a least-squares fit through the origin,
+    ``sum(a*b) / sum(b*b)``, restricted to pixels well above the noise in
+    both frames.  A median of per-pixel ratios -- the obvious alternative --
+    is biased upward by Jensen's inequality wherever the denominator is
+    itself noisy, which is precisely the faint end of any threshold cut.
     """
     a = nan_to_finite(as_float_image(science), 0.0)
     b = nan_to_finite(as_float_image(reference), 0.0)
     _, _, noise_a = sigma_clipped_stats(a)
     _, _, noise_b = sigma_clipped_stats(b)
-    good = (a > 5 * noise_a) & (b > 5 * noise_b)
+    good = (a > n_sigma * noise_a) & (b > n_sigma * noise_b)
     if mask is not None:
         good &= ~np.asarray(mask, dtype=bool)
     if good.sum() < 25:
-        return 1.0
-    # A robust ratio: the median of per-pixel ratios resists the very
-    # variables and transients the subtraction is meant to reveal.
-    ratio = a[good] / np.maximum(b[good], 1e-9)
-    scale = float(np.median(ratio))
+        # Too few bright pixels for a fit; relax the cut before giving up.
+        good = (a > 3 * noise_a) & (b > 3 * noise_b)
+        if mask is not None:
+            good &= ~np.asarray(mask, dtype=bool)
+        if good.sum() < 10:
+            return 1.0
+
+    x, y = b[good], a[good]
+    scale = float((x * y).sum() / max((x * x).sum(), 1e-12))
+
+    # One robust iteration: drop pixels the first fit cannot explain, which
+    # are the variables and transients the subtraction is meant to reveal.
+    residual = y - scale * x
+    spread = float(1.4826 * np.median(np.abs(residual - np.median(residual))))
+    if spread > 0:
+        keep = np.abs(residual - np.median(residual)) < 3.0 * spread
+        if keep.sum() >= 10:
+            x, y = x[keep], y[keep]
+            scale = float((x * y).sum() / max((x * x).sum(), 1e-12))
+
     return float(np.clip(scale, 0.05, 20.0)) if np.isfinite(scale) else 1.0
 
 
@@ -100,7 +123,16 @@ def subtract(science: AstroImage, reference: AstroImage, align: bool = True,
     reference_psf = build_psf(reference_data, rms=reference.rms_map())
     convolved = "none"
 
-    if psf_match:
+    reliable_psf = min(science_psf.n_stars, reference_psf.n_stars) >= 5
+    if psf_match and not reliable_psf:
+        # A PSF built from a handful of stars is unreliable, and matching to
+        # a wrong PSF is worse than not matching at all: it degrades one
+        # epoch and leaves a residual at every source.
+        log.warning("PSF measured from only %d/%d stars; skipping PSF matching",
+                    science_psf.n_stars, reference_psf.n_stars)
+        diagnostics["psf_match_skipped"] = "too few PSF stars"
+
+    if psf_match and reliable_psf:
         # Always blur the *sharper* image: deconvolving the blurrier one
         # would amplify noise and ring around every bright star.
         if science_psf.fwhm < reference_psf.fwhm:

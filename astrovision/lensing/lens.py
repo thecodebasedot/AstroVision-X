@@ -26,7 +26,7 @@ from ..core.types import (
     Verdict,
 )
 from ..io.image import AstroImage
-from .arcs import Arc, detect_arcs, einstein_radius, ring_completeness
+from .arcs import Arc, detect_arcs, detect_ring, einstein_radius, ring_completeness
 
 log = get_logger("lensing.lens")
 
@@ -144,11 +144,28 @@ class LensSearch:
             arcs = detect_arcs(cutout, centre, local_noise,
                                threshold_sigma=2.5, min_area=8,
                                min_axis_ratio=cfg.min_axis_ratio,
-                               max_width=cfg.max_arc_width)
+                               max_width=cfg.max_arc_width,
+                               min_radius=max(3.0,
+                                              0.9 * source.morphology.semi_major))
             arcs = [a for a in arcs if a.length >= cfg.min_arc_length]
-            if not arcs:
+
+            # A complete Einstein ring fills its own radius, so the
+            # azimuthal baseline the arc finder relies on cannot see it.
+            # The radial profile can, and that is an independent path in.
+            ring_scan = detect_ring(cutout, centre, local_noise)
+            if not arcs and not ring_scan["ring_detected"]:
                 source.lens_score = 0.0
                 continue
+            if not arcs:
+                arcs = [Arc(radius=ring_scan["radius"], angle=0.0,
+                            length=2 * np.pi * ring_scan["radius"],
+                            width=max(cfg.max_arc_width * 0.5, 1.5),
+                            axis_ratio=float(cfg.min_axis_ratio),
+                            tangential_alignment=1.0,
+                            peak_significance=ring_scan["significance"],
+                            flux=max(ring_scan["excess"], 1e-6),
+                            area=int(2 * np.pi * ring_scan["radius"]))]
+                source.add_flag("einstein_ring_candidate")
 
             # Multiple images of one source share a radius.  Discarding
             # features far from the median radius removes unrelated
@@ -168,6 +185,7 @@ class LensSearch:
                 "einstein_radius_px": float(theta_e),
                 "radius_scatter": float(scatter),
                 "ring": ring,
+                "ring_scan": ring_scan,
                 "deflector_terms": terms,
                 "score_breakdown": breakdown,
             }

@@ -206,8 +206,12 @@ def field_statistics(catalog: SourceCatalog, shape: Tuple[int, int],
                               if len(galaxies) else float("nan")),
     }
 
-    if len(catalog) >= 30:
-        correlation = two_point_correlation(positions, field_shape=shape)
+    if 30 <= len(catalog) <= 4000:
+        # The estimator is O(N * N_random); above a few thousand sources it
+        # dominates the run, and a subsample would answer a different question.
+        correlation = two_point_correlation(
+            positions, field_shape=shape,
+            n_random=int(np.clip(20 * len(catalog), 1000, 8000)))
         if correlation["separation"].size:
             finite = np.isfinite(correlation["w"])
             statistics["two_point_correlation"] = {

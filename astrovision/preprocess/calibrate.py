@@ -161,22 +161,54 @@ def detect_saturated(image: np.ndarray, level: Optional[float] = None,
     return mask, float(level)
 
 
-def detect_bad_columns(image: np.ndarray, sigma: float = 6.0) -> np.ndarray:
-    """Flag whole columns or rows whose median deviates from their neighbours."""
+def detect_bad_columns(image: np.ndarray, sigma: float = 6.0,
+                       min_fraction: float = 0.55) -> np.ndarray:
+    """Flag dead or hot columns and rows.
+
+    A defective column is bad along its *whole* length; a bright source is
+    not.  Two conditions are therefore required together: the column's
+    median must deviate from its neighbours by more than the median's own
+    uncertainty allows, and a majority of the column's pixels must deviate
+    in the same direction.  Testing the median alone flags any column that
+    happens to contain a bright object -- including, in a difference-image
+    search, the transient being looked for.
+    """
     data = as_float_image(image)
     mask = np.zeros(data.shape, dtype=bool)
+    _, image_median, pixel_noise = sigma_clipped_stats(data)
+    if pixel_noise <= 0:
+        return mask
+
     for axis in (0, 1):
+        length = data.shape[axis]
+        if length < 8:
+            continue
         profile = np.nanmedian(data, axis=axis)
         smooth = median_filter(profile.reshape(1, -1), 5).ravel()
         residual = profile - smooth
-        _, _, noise = sigma_clipped_stats(residual)
-        if noise <= 0:
-            continue
-        bad = np.abs(residual) > sigma * noise
-        if axis == 0:
-            mask[:, bad] = True
-        else:
-            mask[bad, :] = True
+
+        # The uncertainty on a median of `length` pixels; without this floor
+        # a perfectly flat profile makes the noise estimate collapse and
+        # essentially every column is flagged.
+        expected = 1.2533 * pixel_noise / np.sqrt(max(length, 1))
+        _, _, measured = sigma_clipped_stats(residual)
+        noise = max(float(measured), float(expected))
+
+        candidates = np.nonzero(np.abs(residual) > sigma * noise)[0]
+        for index in candidates:
+            line = data[:, index] if axis == 0 else data[index, :]
+            offset = float(residual[index])
+            # Is the whole line offset the same way, or just part of it?
+            deviating = ((line - image_median) * np.sign(offset) >
+                         0.5 * abs(offset))
+            if float(np.mean(deviating)) < min_fraction:
+                continue
+            if axis == 0:
+                mask[:, index] = True
+            else:
+                mask[index, :] = True
+
+    log.debug("bad-column mask flags %d pixels", int(mask.sum()))
     return mask
 
 

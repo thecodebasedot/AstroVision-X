@@ -37,4 +37,10 @@ include = ["astrovision*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-filterwarnings = ["ignore::DeprecationWarning"]
+filterwarnings = [
+  "ignore::DeprecationWarning",
+  "ignore:.*datfix.*:",
+]
+markers = [
+  "slow: end-to-end tests that run the whole pipeline (deselect with -m 'not slow')",
+]

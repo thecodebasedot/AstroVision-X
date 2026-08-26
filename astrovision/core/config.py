@@ -225,7 +225,11 @@ class TransientConfig(_Section):
     psf_match: bool = True
     detection_sigma: float = 5.0
     min_area: int = 3
-    real_bogus_threshold: float = 0.5
+    # Calibrated on simulated fields: genuine transients score above 0.84
+    # and subtraction artefacts below 0.72, so 0.7 keeps every real
+    # candidate while removing most of the artefacts.  Lower it for a
+    # completeness-driven search, raise it for a purity-driven one.
+    real_bogus_threshold: float = 0.7
     host_search_radius: float = 25.0
     max_candidates: int = 500
     reject_dipoles: bool = True

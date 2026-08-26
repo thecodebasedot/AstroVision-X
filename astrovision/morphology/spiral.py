@@ -18,6 +18,11 @@ from ..core.numeric import as_float_image, nan_to_finite
 
 log = get_logger("morphology.spiral")
 
+#: Minimum noise floor for a normalised Fourier amplitude.  Below roughly a
+#: percent, an azimuthal mode is indistinguishable from resampling residuals
+#: left by the polar transform itself.
+MIN_MODE_FLOOR = 0.01
+
 
 def polar_transform(cutout: np.ndarray, centre: Optional[Tuple[float, float]] = None,
                     n_radial: int = 64, n_angular: int = 128,
@@ -143,6 +148,11 @@ def detect_spiral_arms(cutout: np.ndarray, centre: Optional[Tuple[float, float]]
                  for m in range(1, amplitude.shape[1])}
     high = [strengths[m] for m in strengths if m >= 5 and np.isfinite(strengths[m])]
     floor = float(np.median(high)) if high else 0.0
+    # On noiseless or heavily smoothed data the high-order modes vanish and
+    # the ratio to the floor would diverge, so any trace of a mode would
+    # look infinitely significant.  A small absolute floor keeps the test
+    # meaningful: an arm pattern must also be strong in its own right.
+    floor = max(floor, MIN_MODE_FLOOR)
 
     arm_modes = {m: s for m, s in strengths.items() if 2 <= m <= 4}
     if not arm_modes:

@@ -103,6 +103,7 @@ def annotate_physical(catalog: SourceCatalog, redshift: Optional[float] = None,
     """
     cosmology = cosmology or DEFAULT_COSMOLOGY
     assumptions: List[str] = []
+    distance_cache: Dict[float, Dict[str, float]] = {}
     n_physical = 0
 
     if redshift is not None:
@@ -125,12 +126,25 @@ def annotate_physical(catalog: SourceCatalog, redshift: Optional[float] = None,
             source.meta["physical"] = physical
             continue
 
+        # Each distance is a numerical integral, so cache them per redshift:
+        # a whole field usually shares one, and recomputing per source
+        # dominates the stage's runtime for no gain.
+        if z not in distance_cache:
+            distance_cache[z] = {
+                "distance_mpc": float(cosmology.luminosity_distance(z)),
+                "lookback_time_gyr": float(cosmology.lookback_time(z)),
+                "kpc_per_arcsec": float(cosmology.angular_scale(z)),
+                "distance_modulus": float(cosmology.distance_modulus(z)),
+            }
+        cached = distance_cache[z]
         physical["redshift"] = float(z)
-        physical["distance_mpc"] = float(cosmology.luminosity_distance(z))
-        physical["lookback_time_gyr"] = float(cosmology.lookback_time(z))
-        physical["kpc_per_arcsec"] = float(cosmology.angular_scale(z))
-        physical["physical_size_kpc"] = physical_size(angular, z, cosmology)
-        absolute = absolute_magnitude_at_z(source.photometry.magnitude, z, cosmology)
+        physical["distance_mpc"] = cached["distance_mpc"]
+        physical["lookback_time_gyr"] = cached["lookback_time_gyr"]
+        physical["kpc_per_arcsec"] = cached["kpc_per_arcsec"]
+        physical["physical_size_kpc"] = float(angular * cached["kpc_per_arcsec"]) \
+            if np.isfinite(angular) and angular > 0 else float("nan")
+        absolute = (float(source.photometry.magnitude - cached["distance_modulus"])
+                    if np.isfinite(source.photometry.magnitude) else float("nan"))
         physical["absolute_magnitude"] = float(absolute)
         physical["luminosity_solar"] = float(luminosity_solar(absolute, band))
         if source.is_extended:

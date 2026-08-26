@@ -137,6 +137,7 @@ class GradientBoostedClassifier:
         self._trees: List[List[_RegressionStumpTree]] = []
         self._init_scores: Optional[np.ndarray] = None
         self.backend_used_: str = "none"
+        self.n_features_: int = 0
 
     def _resolve_backend(self) -> str:
         if self.backend != "auto":
@@ -156,6 +157,7 @@ class GradientBoostedClassifier:
         encoded = np.searchsorted(self.classes_, labels)
         self.scaler_ = RobustScaler(clip=None).fit(data)
         Z = self.scaler_.transform(data)
+        self.n_features_ = int(Z.shape[1])
 
         backend = self._resolve_backend()
         if backend == "xgboost":
@@ -221,10 +223,10 @@ class GradientBoostedClassifier:
         if self._impl is not None and hasattr(self._impl, "feature_importances_"):
             importance = np.asarray(self._impl.feature_importances_, dtype=float)
         elif self._trees:
-            n_features = max(
-                (max(t.feature) + 1 for round_trees in self._trees for t in round_trees
-                 if t.feature), default=1)
-            importance = np.zeros(max(n_features, 1))
+            # Size from the fitted input, not from the splits actually used:
+            # a feature no tree ever split on has zero importance, and
+            # saying so is more informative than omitting it.
+            importance = np.zeros(max(self.n_features_, 1))
             for round_trees in self._trees:
                 for tree in round_trees:
                     for feature in tree.feature:
@@ -235,6 +237,11 @@ class GradientBoostedClassifier:
         total = importance.sum()
         if total > 0:
             importance = importance / total
-        labels = list(names) if names is not None else [f"f{i}" for i in range(len(importance))]
-        return dict(sorted(zip(labels, importance.tolist()),
-                           key=lambda kv: -kv[1]))
+        if names is not None:
+            labels = list(names)
+            if len(labels) != len(importance):
+                raise ValueError(
+                    f"expected {len(importance)} feature names, got {len(labels)}")
+        else:
+            labels = [f"f{i}" for i in range(len(importance))]
+        return dict(sorted(zip(labels, importance.tolist()), key=lambda kv: -kv[1]))
