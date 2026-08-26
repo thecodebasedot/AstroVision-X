@@ -252,9 +252,9 @@ class LensingConfig(_Section):
     """Strong gravitational-lens candidate search."""
 
     enabled: bool = True
-    min_arc_length: float = 6.0
-    max_arc_width: float = 6.0
-    min_axis_ratio: float = 2.5
+    min_arc_length: float = 5.0
+    max_arc_width: float = 7.0
+    min_axis_ratio: float = 2.0
     ring_bins: int = 72
     score_threshold: float = 0.5
     search_radius_factor: float = 4.0
