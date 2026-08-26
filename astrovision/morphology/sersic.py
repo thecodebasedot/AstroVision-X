@@ -221,8 +221,6 @@ def fit_sersic_2d(cutout: np.ndarray, centre: Optional[Tuple[float, float]] = No
         np.array([np.inf, r_hi, 8.0, 1.0, 360.0, 3.0 * scale + 1e-6]),
     )
     guess = np.clip(guess, bounds[0] + 1e-9, bounds[1] - 1e-9)
-    steps = np.array([max(abs(guess[0]), 1e-3) * 0.5, max(guess[1], 1.0) * 0.4,
-                      0.8, 0.2, 30.0, max(scale, 1e-3)])
 
     if optimize is not None:
         try:

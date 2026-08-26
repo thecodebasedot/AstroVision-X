@@ -11,7 +11,7 @@ from ..core.exceptions import ConfigError
 from ..core.logging import get_logger
 from ..core.types import ObjectClass, SourceCatalog
 from ..io.image import AstroImage
-from .rules import classify_source, field_reference, stellarity
+from .rules import classify_source, field_reference
 
 log = get_logger("classify.classifier")
 

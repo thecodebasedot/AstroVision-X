@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
 
@@ -27,7 +27,7 @@ from ..classify import Classifier
 from ..core.config import AstroVisionConfig
 from ..core.exceptions import PipelineError
 from ..core.logging import get_logger, timed
-from ..core.types import FieldAnalysis, SourceCatalog
+from ..core.types import FieldAnalysis
 from ..detect import Detector
 from ..io.image import AstroImage, ImageSeries
 from ..lensing import LensSearch

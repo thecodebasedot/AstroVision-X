@@ -9,7 +9,7 @@ without it.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 

@@ -47,6 +47,9 @@ jobs:
       - name: Run the test suite
         run: pytest tests/ -q --durations=10
 
+      - name: Run the doctests
+        run: pytest --doctest-modules astrovision/ -q --ignore=astrovision/cli
+
       - name: Smoke-test the command line
         run: |
           astrovision simulate --out /tmp/field.fits --size 128 --stars 20 \

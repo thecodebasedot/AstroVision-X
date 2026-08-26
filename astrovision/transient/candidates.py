@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 
@@ -11,7 +11,6 @@ from ..core.logging import get_logger
 from ..core.numeric import as_float_image, maximum_filter, nan_to_finite
 from ..core.types import (
     LightCurve,
-    Source,
     SourceCatalog,
     TransientCandidate,
     Verdict,

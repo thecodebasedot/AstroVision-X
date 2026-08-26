@@ -8,7 +8,7 @@ to a self-contained NumPy version so the capability is never simply absent.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence
 
 import numpy as np
 

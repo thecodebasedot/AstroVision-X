@@ -7,7 +7,6 @@ the suite fast enough to run on every commit.
 
 from __future__ import annotations
 
-import numpy as np
 import pytest
 
 from astrovision.core.config import AstroVisionConfig

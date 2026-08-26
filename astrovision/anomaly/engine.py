@@ -13,7 +13,7 @@ at this", and the explanation says why.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 
@@ -22,7 +22,7 @@ from ..core.logging import get_logger
 from ..core.numeric import logistic, rescale
 from ..core.types import AnomalyRecord, ObjectClass, Source, SourceCatalog
 from ..ml.autoencoder import DeepAutoencoder, LinearAutoencoder
-from ..ml.features import FEATURE_NAMES, catalog_features, combine_features
+from ..ml.features import catalog_features, combine_features
 from ..ml.isolation_forest import IsolationForest
 from ..ml.metric import SimilaritySearch
 from ..ml.scaler import RobustScaler

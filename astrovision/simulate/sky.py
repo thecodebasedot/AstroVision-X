@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from ..core.logging import get_logger
-from ..core.numeric import SIGMA_TO_FWHM, convolve, gaussian_kernel
+from ..core.numeric import convolve, gaussian_kernel
 from ..io.image import AstroImage, ImageSeries
 from ..io.wcs import SimpleWCS
 from .profiles import (

@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import os
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 import numpy as np
 

@@ -9,7 +9,7 @@ are then reassigned to whichever branch they most plausibly belong to.
 
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 import numpy as np
 
@@ -52,14 +52,12 @@ def deblend_segment(data: np.ndarray, mask: np.ndarray, threshold: float,
     # Track branches: a branch is a component that persists as the
     # threshold rises and is significant on its own.
     cores: List[np.ndarray] = []
-    previous_labels: Optional[np.ndarray] = None
     for level in levels[1:]:
         above = footprint & (values > level)
         if not above.any():
             break
         labels, count = label(above)
         if count < 2:
-            previous_labels = labels
             continue
         # Each component at this level that splits from its parent and is
         # bright enough becomes a candidate core.
@@ -80,7 +78,6 @@ def deblend_segment(data: np.ndarray, mask: np.ndarray, threshold: float,
                     break
             if not merged:
                 cores.append(component)
-        previous_labels = labels
 
     cores = _prune_nested(cores, values, base, contrast, total_flux)
     if len(cores) < 2:

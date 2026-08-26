@@ -9,7 +9,7 @@ different scales and are often missing.
 
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import List
 
 import numpy as np
 

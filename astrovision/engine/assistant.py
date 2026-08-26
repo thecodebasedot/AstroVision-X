@@ -12,12 +12,12 @@ same as being new.  That boundary is enforced in the wording here.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Sequence
 
 import numpy as np
 
 from ..core.logging import get_logger
-from ..core.types import FieldAnalysis, ObjectClass, Source, Verdict
+from ..core.types import FieldAnalysis, Source, Verdict
 from .priority import PriorityItem, rank_candidates
 
 log = get_logger("engine.assistant")

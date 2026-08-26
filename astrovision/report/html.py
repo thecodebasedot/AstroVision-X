@@ -10,13 +10,13 @@ import base64
 import html
 import io
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 import numpy as np
 
 from ..core.backend import try_import
 from ..core.types import FieldAnalysis
-from ..preprocess.normalize import asinh_stretch, zscale
+from ..preprocess.normalize import asinh_stretch
 from .schema import build_report
 
 STYLE = """

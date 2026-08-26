@@ -8,7 +8,7 @@ and records which features were missing so that can be reported.
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Optional
 
 import numpy as np
 

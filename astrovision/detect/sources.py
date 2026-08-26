@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
@@ -162,6 +162,7 @@ def extract_sources(image: AstroImage, config: Optional[DetectionConfig] = None,
         "image": image.name, "band": image.band, "mjd": image.mjd,
         "threshold_sigma": config.threshold_sigma,
         "detection_backend": config.backend,
+        "median_threshold": float(np.median(threshold)),
     })
     if count == 0:
         log.info("no sources detected in '%s'", image.name)

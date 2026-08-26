@@ -9,16 +9,13 @@ because a priority nobody can interrogate is not useful to a scientist.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
 from ..core.logging import get_logger
 from ..core.types import (
-    AnomalyRecord,
     FieldAnalysis,
-    LensCandidate,
-    Source,
     TransientCandidate,
     Verdict,
 )

@@ -8,7 +8,7 @@ magnitudes a scientific report must quote.
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Sequence, Tuple
+from typing import Sequence, Tuple
 
 import numpy as np
 

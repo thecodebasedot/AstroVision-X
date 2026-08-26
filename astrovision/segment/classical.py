@@ -9,7 +9,6 @@ import numpy as np
 from ..core.backend import try_import
 from ..core.logging import get_logger
 from ..core.numeric import as_float_image, gaussian_filter, maximum_filter
-from ..detect.labeling import label
 
 log = get_logger("segment.classical")
 

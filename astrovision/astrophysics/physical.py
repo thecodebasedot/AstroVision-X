@@ -9,16 +9,13 @@ quoted without its assumptions is not a measurement.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
 from ..core.logging import get_logger
-from ..core.types import ObjectClass, Source, SourceCatalog
+from ..core.types import ObjectClass, SourceCatalog
 from ..photometry.magnitudes import (
-    SOLAR_ABSOLUTE_MAGNITUDE,
-    absolute_magnitude,
-    colour_temperature,
     luminosity_solar,
 )
 from .cosmology import DEFAULT_COSMOLOGY, Cosmology

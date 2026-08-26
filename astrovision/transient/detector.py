@@ -11,7 +11,6 @@ from ..core.logging import get_logger
 from ..core.types import SourceCatalog, TransientCandidate
 from ..io.image import AstroImage, ImageSeries
 from .candidates import (
-    associate_hosts,
     build_candidate_light_curves,
     extract_candidates,
     merge_epoch_candidates,

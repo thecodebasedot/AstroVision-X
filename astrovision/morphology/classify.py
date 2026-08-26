@@ -14,7 +14,6 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from ..core.logging import get_logger
-from ..core.numeric import softmax
 from ..core.types import Morphology, MorphologyMetrics
 from .gini_m20 import bulge_statistic, merger_statistic
 

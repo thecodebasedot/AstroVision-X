@@ -14,7 +14,7 @@ import glob
 import json
 import os
 import sys
-from typing import Any, Dict, List, Optional, Sequence
+from typing import List, Optional, Sequence
 
 import numpy as np
 
@@ -248,7 +248,8 @@ def cmd_config(args: argparse.Namespace) -> int:
         print(f"wrote configuration to {args.out}")
     elif args.show:
         print("\n".join(config.describe()))
-    else:
+    elif not args.list_presets:
+        # Listing presets on its own should not also dump the whole config.
         print(json.dumps(config.to_dict(), indent=2))
     if args.list_presets:
         print("\nAvailable presets:")

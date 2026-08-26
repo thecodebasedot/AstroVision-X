@@ -9,7 +9,7 @@ import numpy as np
 from ..core.config import TimeSeriesConfig
 from ..core.logging import get_logger
 from ..core.types import LightCurve, Source, SourceCatalog
-from ..io.image import AstroImage, ImageSeries
+from ..io.image import ImageSeries
 from ..photometry.aperture import aperture_photometry
 from .features import variability_features, variability_score
 from .periodogram import find_period

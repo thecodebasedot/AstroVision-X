@@ -10,7 +10,7 @@ from ..core.config import PhotometryConfig
 from ..core.logging import get_logger
 from ..core.types import SourceCatalog
 from ..io.image import AstroImage
-from .aperture import aperture_photometry, circular_aperture_weights, elliptical_photometry, multi_aperture
+from .aperture import circular_aperture_weights, elliptical_photometry, multi_aperture
 from .growth import auto_aperture, concentration_index, curve_of_growth, flux_radius
 from .magnitudes import flux_to_magnitude, limiting_magnitude, surface_brightness
 
@@ -74,8 +74,8 @@ class Photometer:
         zero_point = float(image.header.get("MAGZP", cfg.zero_point) or cfg.zero_point)
         pixel_scale = image.pixel_scale if image.wcs is not None else cfg.pixel_scale
 
-        # Mask neighbours so a companion does not leak into the aperture.
-        source_mask = None
+        # Neighbours are masked per source below, so a companion cannot leak
+        # into another object's aperture.
         if segmentation is not None:
             segmentation = np.asarray(segmentation, dtype=np.int32)
 

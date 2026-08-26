@@ -30,7 +30,7 @@ from astrovision.preprocess import Preprocessor
 from astrovision.preprocess.align import Transform, cross_correlation_shift, warp
 from astrovision.preprocess.background import estimate_background
 from astrovision.preprocess.calibrate import detect_cosmic_rays
-from astrovision.preprocess.psf import build_psf, measure_fwhm
+from astrovision.preprocess.psf import measure_fwhm
 from astrovision.segment import Segmenter, decompose, watershed_split
 from astrovision.simulate import SkyConfig, SkySimulator
 from astrovision.simulate.profiles import (

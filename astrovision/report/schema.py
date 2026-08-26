@@ -7,7 +7,7 @@ payload and an HTML page can never disagree about what the run found.
 from __future__ import annotations
 
 import datetime as _dt
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict
 
 import numpy as np
 
