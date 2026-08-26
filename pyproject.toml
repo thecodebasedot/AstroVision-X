@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "astrovision-x"
+version = "0.1.0"
+description = "Advanced Computer Vision & Machine Learning Framework for Astronomical and Astrophysical Analysis"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "AstroVision-X Contributors" }]
+keywords = ["astronomy", "astrophysics", "computer-vision", "machine-learning", "transients", "anomaly-detection"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Astronomy",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+  "Programming Language :: Python :: 3",
+]
+dependencies = ["numpy>=1.21"]
+
+[project.optional-dependencies]
+science = ["scipy>=1.7", "astropy>=5.0"]
+ml = ["scikit-learn>=1.0"]
+deep = ["torch>=2.0"]
+viz = ["matplotlib>=3.5"]
+all = ["scipy>=1.7", "astropy>=5.0", "scikit-learn>=1.0", "matplotlib>=3.5"]
+dev = ["pytest>=7.0", "pytest-cov"]
+
+[project.scripts]
+astrovision = "astrovision.cli.main:main"
+avx = "astrovision.cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["astrovision*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
