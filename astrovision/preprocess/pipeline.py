@@ -107,6 +107,9 @@ class Preprocessor:
         if cfg.subtract_background:
             data = data - background
             report["steps"].append("background_subtraction")
+            # `background` is zeroed on the result so `subtracted()` is a no-op
+            # downstream, but the model itself is kept: checking it is the
+            # first thing to do when a field looks over- or under-subtracted.
             background_out = np.zeros_like(background)
         else:
             background_out = background
@@ -123,6 +126,7 @@ class Preprocessor:
             result.meta["psf"] = self.psf.to_dict()
             result.meta["psf_model"] = self.psf
 
+        result.meta["background_model"] = background
         result.meta["preprocess"] = report
         self.report = report
         log.info("preprocessed '%s': %s", image.name, ", ".join(report["steps"]) or "no-op")

@@ -188,6 +188,25 @@ information real searches rely on.
 
 ---
 
+## Gallery
+
+Every image below is produced by `examples/04_make_figures.py`, which runs the
+real pipeline on a simulated field and plots what each stage returned. Nothing
+is drawn by hand.
+
+| | |
+| --- | --- |
+| ![Detections](figures/01_field_detections.png) | **Detection and classification.** The field before and after background subtraction, with every detection circled and coloured by class. |
+| ![Stages](figures/02_pipeline_stages.png) | **Preprocessing.** Raw frame, the fitted background model, the subtracted image, and the deblended segmentation. |
+| ![Morphology](figures/03_galaxy_morphology.png) | **Galaxy morphology.** Injected type against measured type, with Sérsic *n*, concentration, asymmetry, Gini/M20 and arm count. |
+| ![Transients](figures/04_transient_discovery.png) | **Transient search.** Template, new epoch and difference, held on a single intensity scale so the residual is comparable to the source it came from. |
+| ![Light curves](figures/05_light_curves.png) | **Light curves.** Photometry recovered from the epoch stack, against the injected curve. |
+| ![Anomalies](figures/06_anomalies.png) | **Novelty search.** The highest-ranked outliers, each with the written reason it was flagged. |
+| ![Lens](figures/07_lens_candidate.png) | **Lens candidate.** Deflector, the same cutout with smooth galaxy light removed, and the tangential arcs with a fitted Einstein radius. |
+| ![Report](figures/08_html_report.png) | **The written report.** What the research assistant produces for a field, including the ranked follow-up list. |
+
+---
+
 ## Installation
 
 ```bash

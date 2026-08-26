@@ -158,11 +158,16 @@ def rank_candidates(analysis: FieldAnalysis, limit: int = 20) -> List[PriorityIt
             continue
         merged[key] = item
 
-    ranked = sorted(merged.values(), key=lambda i: -i.score)[:max(1, limit)]
+    # A list headed "follow-up candidates" must not contain things the
+    # pipeline itself judged not worth following up.
+    worth_it = [item for item in merged.values()
+                if item.verdict is not Verdict.NOT_INTERESTING]
+    ranked = sorted(worth_it, key=lambda i: -i.score)[:max(1, limit)]
     for index, item in enumerate(ranked, start=1):
         item.rank = index
-    log.info("ranked %d follow-up targets from %d flagged objects",
-             len(ranked), len(items))
+    log.info("ranked %d follow-up targets from %d flagged objects (%d below "
+             "the follow-up threshold)",
+             len(ranked), len(items), len(merged) - len(worth_it))
     return ranked
 
 
