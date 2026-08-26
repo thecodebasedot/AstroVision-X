@@ -12,6 +12,7 @@ from ..io.image import AstroImage
 from .background import estimate_background
 from .calibrate import (
     apply_calibration,
+    detect_bad_columns,
     detect_cosmic_rays,
     detect_saturated,
     repair_pixels,
@@ -69,6 +70,20 @@ class Preprocessor:
         # detection and thresholding both need.
         background, rms = estimate_background(data, cfg.background_box,
                                               cfg.background_filter, mask)
+
+        if cfg.mask_bad_columns:
+            # Dead or hot columns survive background subtraction and turn
+            # into strings of spurious residuals in every difference image,
+            # so they must be masked before detection ever sees them.
+            columns = detect_bad_columns(data, cfg.bad_column_sigma)
+            if columns.any():
+                # Interpolate over them as well as flagging them: leaving the
+                # values in place would put a string of spurious residuals
+                # down every difference image.
+                data = repair_pixels(data, columns, size=5)
+                mask |= columns
+                report["bad_column_pixels"] = int(columns.sum())
+                report["steps"].append("bad_column_repair")
 
         if cfg.reject_cosmic_rays:
             cosmic = detect_cosmic_rays(data, cfg.cosmic_ray_sigma,

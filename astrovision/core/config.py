@@ -116,6 +116,8 @@ class PreprocessConfig(_Section):
     background_box: int = 64
     background_filter: int = 3
     reject_cosmic_rays: bool = True
+    mask_bad_columns: bool = True
+    bad_column_sigma: float = 6.0
     cosmic_ray_sigma: float = 6.0
     cosmic_ray_contrast: float = 2.0
     normalize: str = "zscale"          # zscale | asinh | percentile | zscore | none
