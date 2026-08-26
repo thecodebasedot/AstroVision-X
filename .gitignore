@@ -216,3 +216,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# AstroVision-X
+.venv/
+astrovision_output/
+*.fits
+!tests/data/*.fits
