@@ -9,6 +9,7 @@ morphology and transient stages be validated quantitatively.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
@@ -174,6 +175,44 @@ class SkySimulator:
             truth.period = float(self.rng.uniform(0.05, 12.0))
             truth.amplitude = float(self.rng.uniform(0.08, 0.6))
         return truth
+
+    def add_mover(self, canvas: np.ndarray, x: float, y: float, flux: float,
+                  trail_length: float = 0.0, trail_angle: float = 0.0) -> TruthObject:
+        """Render a moving object, trailed by its motion during the exposure.
+
+        A trailed source is not a stretched point source: it is the PSF
+        *integrated along the track the object took while the shutter was
+        open*.  Rendering it as a sum of PSF stamps along that path is
+        therefore exact rather than an approximation, and it reproduces the
+        property detection relies on -- a trail has the PSF's profile across
+        its width and a flat top along its length, which no elongated galaxy
+        does.
+
+        ``trail_length`` is in pixels; below about half the seeing width the
+        object is indistinguishable from a point source and one stamp is
+        rendered instead of many.
+        """
+        length = float(max(trail_length, 0.0))
+        angle = math.radians(float(trail_angle))
+        if length < 0.5 * self.config.seeing_fwhm:
+            self.add_star(canvas, x, y, flux)
+            self._next_id -= 1
+            return TruthObject(self._new_id(), x, y, "mover", flux,
+                               morphology="unresolved",
+                               meta={"trail_length": length, "trail_angle": trail_angle,
+                                     "trailed": False})
+        # One sample per half pixel keeps the trail smooth; fewer leaves it
+        # visibly beaded, which would be an artefact of the simulator rather
+        # than of the sky.
+        n_samples = max(2, int(np.ceil(2.0 * length)))
+        for step in range(n_samples):
+            offset = (step / (n_samples - 1) - 0.5) * length
+            self.add_star(canvas, x + offset * np.cos(angle), y + offset * np.sin(angle),
+                          flux / n_samples)
+            self._next_id -= 1
+        return TruthObject(self._new_id(), x, y, "mover", flux, morphology="trailed",
+                           meta={"trail_length": length, "trail_angle": trail_angle,
+                                 "trailed": True})
 
     def add_galaxy(self, canvas: np.ndarray, x: float, y: float, flux: float,
                    morphology: Optional[str] = None) -> TruthObject:
@@ -623,13 +662,27 @@ class SkySimulator:
         return images, truth
 
     def generate_series(self, n_epochs: int = 5, cadence: float = 2.0,
-                        n_transients: int = 2, transient_kind: str = "supernova"
+                        n_transients: int = 2, transient_kind: str = "supernova",
+                        n_movers: int = 0,
+                        mover_rate_range: Tuple[float, float] = (15.0, 90.0)
                         ) -> Tuple[ImageSeries, List[TruthObject], List[Dict[str, Any]]]:
         """Generate a multi-epoch series with injected transients.
 
         Returns ``(series, static_truth, transient_truth)``.  Every epoch
         shares the same static sky so difference imaging has a genuine
         template, while transients and variable stars change with time.
+
+        ``n_movers`` injects solar-system objects, whose truth records are
+        appended to the transient list with ``kind="mover"``.  Their rates
+        are drawn from ``mover_rate_range`` in **arcseconds per hour**, which
+        is the unit the sky works in: a main-belt asteroid near opposition
+        moves at roughly 30 arcsec/hour and a near-Earth object far faster.
+
+        The unit matters for the cadence too.  At 30 arcsec/hour an object
+        crosses a 2-arcminute field in four hours, so a series taken two days
+        apart never sees the same asteroid twice -- which is why asteroid
+        linking is done *within a night*.  Pass a cadence of a fraction of a
+        day when injecting movers.
         """
         cfg = self.config
         rng = self.rng
@@ -700,6 +753,35 @@ class SkySimulator:
                 "host_truth_id": host_id,
             })
 
+        # Movers: a start position, a constant sky velocity, and a trail set
+        # by how far the object travels while the shutter is open.
+        for k in range(max(0, int(n_movers))):
+            rate = float(rng.uniform(*mover_rate_range))          # arcsec / hour
+            heading = float(rng.uniform(0.0, 360.0))
+            # arcsec/hour -> pixels/day: divide by the pixel scale, then
+            # multiply by 24.  Dividing by 24 instead leaves an asteroid
+            # moving half a pixel across a whole series, which looks exactly
+            # like a stationary source and silently removes the thing being
+            # tested.
+            speed = rate / cfg.pixel_scale * 24.0                 # pixels / day
+            # Start on the side the object is coming *from*, so it spends the
+            # series crossing the field rather than leaving it at once.
+            span = speed * cadence * (n_epochs - 1)
+            start_x = float(np.clip(nx / 2 - 0.5 * span * np.cos(np.radians(heading)),
+                                    margin, nx - margin))
+            start_y = float(np.clip(ny / 2 - 0.5 * span * np.sin(np.radians(heading)),
+                                    margin, ny - margin))
+            transients.append({
+                "id": 20_000 + k, "x": start_x, "y": start_y, "kind": "mover",
+                "peak_flux": float(10 ** rng.uniform(3.6, 4.6)),
+                "rate_arcsec_per_hour": rate,
+                "heading_deg": heading,
+                "vx": speed * float(np.cos(np.radians(heading))),
+                "vy": speed * float(np.sin(np.radians(heading))),
+                "trail_length": rate * (300.0 / 3600.0) / cfg.pixel_scale,
+                "host_truth_id": None,
+            })
+
         images: List[AstroImage] = []
         for epoch in range(int(n_epochs)):
             epoch_sim = SkySimulator(SkyConfig(**{**cfg.__dict__, "seed": base_seed + 1000 + epoch}))
@@ -712,6 +794,19 @@ class SkySimulator:
                 epoch_sim._next_id -= 1
 
             for spec in transients:
+                if spec["kind"] == "mover":
+                    elapsed = epoch * cadence
+                    mx = spec["x"] + spec["vx"] * elapsed
+                    my = spec["y"] + spec["vy"] * elapsed
+                    inside = (0 <= mx < nx) and (0 <= my < ny)
+                    if inside:
+                        epoch_sim.add_mover(frame, mx, my, spec["peak_flux"],
+                                            spec["trail_length"], spec["heading_deg"])
+                        epoch_sim._next_id -= 1
+                    spec.setdefault("positions", []).append(
+                        {"epoch": epoch, "time": elapsed, "x": float(mx), "y": float(my),
+                         "inside": bool(inside)})
+                    continue
                 dt = epoch - spec["peak_epoch"]
                 # Fast exponential rise, slower exponential decline.
                 if dt < 0:

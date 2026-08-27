@@ -321,6 +321,83 @@ bias reached 10 %, and a 10 % scale error leaves a 10 % residual at every star:
 **Templates hold out the epoch being searched.** Including it would put a
 fraction of any transient into the very template used to subtract it.
 
+## Moving objects
+
+A difference image finds an asteroid as readily as a supernova. What tells
+them apart is that one of them is in a different place every time — and that
+difference is destructive, not helpful, to a transient pipeline: the
+position-based merging that consolidates a real transient into one candidate
+*scatters* a mover into N separate single-epoch detections, each looking like
+a marginal unconfirmed transient. One asteroid crossing five epochs becomes
+five entries in a follow-up queue, none of them real.
+
+Linking puts it back together. Every pair of detections from two epochs
+implies a velocity; those within the searched rate range are extrapolated to
+the other epochs, and whatever lands on the prediction joins the track.
+
+Three decisions do the real work.
+
+**Rates are in arcseconds per hour, not pixels per epoch.** A rate in pixels
+says as much about the camera as about the object, and the cut that keeps the
+search tractable is a physical one: a main-belt asteroid near opposition moves
+at roughly 30 arcsec/hour. It also sets the cadence — at that rate an object
+crosses a two-arcminute field in four hours, so a series taken two nights
+apart never sees the same asteroid twice. Asteroid linking is a within-night
+operation, and the simulator's units had to be right before any of this could
+be tested. They were not, at first: a factor-of-24 slip left injected
+asteroids crossing half a pixel per night, indistinguishable from stationary
+sources.
+
+**The residual is reduced by the degrees of freedom.** A tracklet fits four
+parameters, so three detections leave two degrees of freedom and five leave
+six — and a three-point track therefore has a *smaller* raw residual than a
+five-point one for identical astrometric errors. Comparing raw residuals
+rewards the shorter, weaker link. Dividing by `sqrt(1 - 2/n)` widened the
+measured gap between real and chance tracklets from a factor of five to a
+factor of seven and removed the only spurious tracklet in the validation set,
+without tuning a threshold.
+
+**The chance rate is estimated, not assumed.** Unrelated detections do line
+up. The expected number of coincidental tracklets follows from the field's own
+detection density, the matching tolerance and the number of epochs, and it is
+reported per run and per tracklet. Twenty detections an epoch over three
+epochs with a three-pixel tolerance yields about 2.7 expected false tracklets
+— which is not a defect in the estimate but a fair description of what three
+epochs buy.
+
+### Trails
+
+An object that moves while the shutter is open leaves the PSF smeared along
+its track. That is a second handle, and its value lies in being *independent*:
+linking works across exposures, a trail works within one. When both agree on
+a direction, coincidence becomes a much worse explanation.
+
+Measuring it correctly took two corrections. Comparing a source's
+second-moment size against the fitted PSF FWHM is comparing two different
+quantities — a Moffat's second moment far exceeds its FWHM, because the wings
+carry weight a FWHM ignores — and the subtraction reported a multi-pixel trail
+on a perfectly round star. The measurement is now the source's own major axis
+against its minor, which cancels the profile shape and the seeing together.
+And moments must be taken in a bounded window: unbounded, on a faint source,
+clipping the negative half of the noise leaves a positive floor across every
+pixel whose second moment is the *stamp's* size, and a round point source was
+credited with a 41-pixel trail.
+
+A trail is finally required to be an elongation, not merely an excess. A
+noise-dominated source has two large but nearly equal axes whose quadrature
+difference is still several pixels while the source is round to two percent.
+
+### What a tracklet is not
+
+A tracklet is not an object and certainly not a discovery. It is a set of
+detections consistent with linear motion over a short arc. Turning that into
+an object needs an orbit; turning it into a *new* object needs the Minor
+Planet Center. The stage says so in its log line and the report repeats it.
+
+Movers are demoted inside the transient list rather than deleted from it. The
+tracklet is an interpretation of those detections, and an astronomer who
+disagrees needs to see what was interpreted.
+
 ## Real/bogus vetting
 
 Any difference image produces far more artefacts than transients. Nine features

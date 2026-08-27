@@ -196,6 +196,7 @@ for source in analysis.catalog:
 | Search | Method |
 | --- | --- |
 | Transients | Hold-one-out templates, PSF matching, veto-style real/bogus vetting |
+| Solar-system objects | Tracklet linking across epochs, confirmed by within-exposure trails |
 | Variability | Reduced χ², Stetson J, von Neumann η, Lomb–Scargle periods |
 | Novelty | Isolation forest + autoencoder + k-NN isolation, rank-combined |
 | Strong lensing | Tangential arcs at a shared radius; radial scan for full rings |
@@ -224,6 +225,7 @@ bad columns. They are *not* claims about real survey data.
 | Probability calibration | expected calibration error 0.112 → 0.027 |
 | Galaxy morphology (5 classes) | 59 % exact, 78 % at family level |
 | Transient recall | 12/14, with 2 spurious over five fields |
+| Moving-object recall | 10/10, 0 spurious over ten fields |
 | Strong-lens recall | 8/14, with 3 false positives over five fields |
 | CNN stamp classification | 85 % on a 266-stamp training set |
 | LSTM light-curve classification | 92 % over six variability classes |

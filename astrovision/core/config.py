@@ -290,6 +290,26 @@ class TransientConfig(_Section):
 
 
 @dataclass
+class MovingObjectConfig(_Section):
+    """Linking difference-image detections into solar-system tracklets."""
+
+    enabled: bool = True
+    #: Rates in arcsec/hour.  The defaults span outer main belt to fast
+    #: near-Earth objects; narrowing them is the cheapest way to cut the
+    #: chance-alignment rate.
+    min_rate_arcsec_per_hour: float = 5.0
+    max_rate_arcsec_per_hour: float = 300.0
+    tolerance_pixels: float = 3.0
+    min_points: int = 3
+    max_rms_pixels: float = 2.0
+    max_arc_days: float = 1.5
+    min_score: float = 0.55
+    measure_trails: bool = True
+    min_trail_excess_pixels: float = 1.5
+    pixel_scale: float = float("nan")      # used only when the image has no WCS
+
+
+@dataclass
 class TimeSeriesConfig(_Section):
     """Light-curve extraction and variability analysis."""
 
@@ -370,6 +390,7 @@ class AstroVisionConfig(_Section):
     anomaly: AnomalyConfig = field(default_factory=AnomalyConfig)
     transient: TransientConfig = field(default_factory=TransientConfig)
     timeseries: TimeSeriesConfig = field(default_factory=TimeSeriesConfig)
+    moving: MovingObjectConfig = field(default_factory=MovingObjectConfig)
     lensing: LensingConfig = field(default_factory=LensingConfig)
     clustering: ClusteringConfig = field(default_factory=ClusteringConfig)
     cosmology: CosmologyConfig = field(default_factory=CosmologyConfig)

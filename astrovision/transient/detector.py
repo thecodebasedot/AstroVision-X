@@ -58,6 +58,7 @@ class TransientDetector:
             log.warning("series consistency: %s", problem)
 
         self.differences = []
+        self.per_epoch = []
         per_epoch: List[List[TransientCandidate]] = []
 
         for index, science in enumerate(series):
@@ -72,6 +73,10 @@ class TransientDetector:
             self.differences.append(result)
             per_epoch.append(extract_candidates(result, cfg, catalog, epoch_index=index))
 
+        # Kept for the moving-object stage, which needs the detections
+        # *before* they are merged by position -- position-based merging is
+        # exactly what scatters a mover.
+        self.per_epoch = per_epoch
         if not per_epoch:
             return []
 

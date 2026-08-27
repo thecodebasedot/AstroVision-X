@@ -377,6 +377,38 @@ to 33 σ — and the 33 σ residual is the transient itself.
 
 Tests: `TestRealBogus::*`, `TestDifferenceImaging::*`, `TestTransientSearch::*`.
 
+## Moving objects
+
+**Setup.** 300 × 300 fields, five epochs at a 14-minute cadence (a
+one-hour arc), two injected asteroids at 15–90 arcsec/hour plus one
+supernova. Five seeds with movers and five without.
+
+**Result.** **10/10** injected movers recovered, **0** spurious tracklets,
+**10/10** supernovae still present as transient candidates. Rates recovered
+to better than 0.1 arcsec/hour and headings to within a degree; track
+residuals 0.19–0.24 px against an astrometric precision of 0.15 px.
+
+44 transient candidates were reclassified as movers — detections that would
+otherwise have been 44 single-epoch entries in a follow-up queue.
+
+The five mover-free runs produced no tracklets at all, which is the control
+that matters: a linker that finds asteroids in a field containing none is
+finding its own tolerance.
+
+| Cut on the track residual | Real kept | Spurious kept |
+| --- | --- | --- |
+| ≤ 0.4 px | 10/14 | 0/1 |
+| ≤ 0.8 px | 12/14 | 0/1 |
+| ≤ 1.5 px (raw) | 14/14 | 1/1 |
+| ≤ 1.5 px (reduced by d.o.f.) | 14/14 | 0/1 |
+
+The last row is the whole point. Reducing the residual by the degrees of
+freedom is not a tuned threshold — it corrects a real unfairness, since a
+three-point fit of four parameters cannot help but look tighter than a
+five-point one.
+
+Tests: `tests/test_moving.py`.
+
 ## Variability and periods
 
 Irregularly sampled light curves, 40 epochs over 50 days:

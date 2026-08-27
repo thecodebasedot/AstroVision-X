@@ -511,6 +511,10 @@ class FieldAnalysis:
     transients: List[TransientCandidate] = field(default_factory=list)
     anomalies: List[AnomalyRecord] = field(default_factory=list)
     lenses: List[LensCandidate] = field(default_factory=list)
+    #: Solar-system tracklets, as plain dict-able objects from
+    #: :mod:`astrovision.moving`.  Typed loosely to keep `core.types` free of
+    #: a dependency on a stage package.
+    tracklets: List[Any] = field(default_factory=list)
     light_curves: Dict[int, LightCurve] = field(default_factory=dict)
     statistics: Dict[str, Any] = field(default_factory=dict)
     provenance: Dict[str, Any] = field(default_factory=dict)
@@ -528,6 +532,7 @@ class FieldAnalysis:
             "n_transients": len(self.transients),
             "n_anomalies": len(self.anomalies),
             "n_lens_candidates": len(self.lenses),
+            "n_tracklets": len(self.tracklets),
             "n_light_curves": len(self.light_curves),
         }
 
@@ -537,6 +542,7 @@ class FieldAnalysis:
             "catalog": self.catalog.to_dict(include_embedding),
             "transients": [t.to_dict() for t in self.transients],
             "anomalies": [a.to_dict() for a in self.anomalies],
+            "tracklets": [t.to_dict() for t in self.tracklets],
             "lens_candidates": [l.to_dict() for l in self.lenses],
             "statistics": self.statistics,
             "provenance": self.provenance,

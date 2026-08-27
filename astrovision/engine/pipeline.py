@@ -37,6 +37,7 @@ from ..lensing import LensSearch
 from ..ml.clustering import cluster, silhouette_score
 from ..ml.features import catalog_embeddings, catalog_features, feature_report
 from ..morphology import MorphologyAnalyzer
+from ..moving import MovingObjectFinder
 from ..photometry import Photometer
 from ..photometry.multiband import forced_photometry, measure_colours
 from ..preprocess import Preprocessor
@@ -105,6 +106,7 @@ class Pipeline:
         self.anomaly = AnomalyEngine(self.config.anomaly)
         self.lensing = LensSearch(self.config.lensing)
         self.transient = TransientDetector(self.config.transient)
+        self.moving = MovingObjectFinder(self.config.moving)
         self.timeseries = LightCurveAnalyzer(self.config.timeseries)
         self.assistant = ResearchAssistant(self.config.report.top_candidates)
         self.cosmology = Cosmology(self.config.cosmology.H0,
@@ -346,13 +348,37 @@ class Pipeline:
 
                 self._stage("transient", cfg.transient.enabled, transients, analysis)
 
+                def movers() -> Dict[str, Any]:
+                    per_epoch = getattr(self.transient, "per_epoch", None)
+                    if not per_epoch:
+                        return {"skipped": "the transient stage produced no detections"}
+                    result = self.moving.run(
+                        series, per_epoch,
+                        getattr(self.transient, "differences", None))
+                    analysis.tracklets = result.tracklets
+                    if result.tracklets:
+                        analysis.warn(
+                            f"{len(result.tracklets)} moving-object tracklet(s) found; "
+                            "each needs an orbit and a Minor Planet Center check "
+                            "before it is an object, let alone a new one")
+                    # Movers are demoted inside the transient list rather than
+                    # removed, so the evidence behind the interpretation stays
+                    # visible to anyone who disagrees with it.
+                    analysis.transients = [
+                        c for c in analysis.transients
+                        if "moving_object" not in c.flags] + [
+                        c for c in analysis.transients if "moving_object" in c.flags]
+                    return dict(self.moving.report)
+
+                self._stage("moving", cfg.moving.enabled, movers, analysis)
+
                 def light_curves() -> Dict[str, Any]:
                     analysis.light_curves = self.timeseries.run(series, analysis.catalog)
                     return dict(self.timeseries.report)
 
                 self._stage("timeseries", cfg.timeseries.enabled, light_curves, analysis)
             else:
-                for name in ("transient", "timeseries"):
+                for name in ("transient", "moving", "timeseries"):
                     self.stages.append(StageResult(
                         name=name, status="skipped",
                         message="needs a multi-epoch series"))
