@@ -178,6 +178,7 @@ for source in analysis.catalog:
 | Seeing homogenisation | Every band convolved to the worst PSF in the set, in arcsec |
 | Colours | Recorded only when both bands clear a signal-to-noise floor; one-sided limits otherwise |
 | Stellar locus | Fitted from the field's own point sources, not from a table |
+| Photometric redshift | Template fit over a redshift grid, with a bimodal posterior reported |
 | Colour classification | Likelihood ratio between two field-calibrated populations |
 
 ### Calibration
@@ -224,6 +225,8 @@ bad columns. They are *not* claims about real survey data.
 | Astrometric solution | 3.5″ header error → 0.047″, 0.110″ rms |
 | Photometric zero point | 24.987 ± 0.002 against a true 25.000 |
 | Probability calibration | expected calibration error 0.112 → 0.027 |
+| Photometric redshift (5 filters) | scatter 0.015 in Δz/(1+z), 2.8 % outliers |
+| Photometric redshift (3 filters) | scatter 0.043, 22 % outliers — the filter count dominates |
 | Galaxy morphology (5 classes) | 59 % exact, 78 % at family level |
 | Transient recall | 12/14, with 2 spurious over five fields |
 | Moving-object recall | 10/10, 0 spurious over ten fields |

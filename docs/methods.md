@@ -306,6 +306,69 @@ magnitude. It is fitted only when the standards span enough colour to
 constrain it — a slope fitted to points all at the same colour returns a large
 coefficient with a small formal error, which is the worst possible pairing.
 
+## Photometric redshifts
+
+A distance from four numbers. It works because a galaxy spectrum is not
+featureless: an old stellar population drops sharply shortward of 4000
+angstroms, a young one carries strong emission lines, and as the galaxy
+recedes those features slide through the filters. The pattern of broad-band
+fluxes therefore depends on redshift, and fitting a library of redshifted
+spectra recovers it.
+
+The integral that turns a spectrum into a magnitude is weighted by `1/λ`,
+the photon-counting convention, because a CCD counts photons rather than
+energy. The energy-weighted version shifts every magnitude by a few
+hundredths — and shifts them by *different* amounts in different filters,
+which is a colour error and therefore a redshift error.
+
+Three things the arithmetic makes it easy to hide, and this implementation
+does not.
+
+**The posterior is often bimodal.** A red galaxy at low redshift and a blue
+one higher up can produce the same colours, because a 4000 Å break sitting
+between two filters looks much like a red continuum. Reporting only the peak
+converts a known ambiguity into a confident wrong answer. Both peaks are
+reported; a source whose second peak carries a quarter of the weight is
+flagged ambiguous and is not called reliable.
+
+**The posterior width is not the error.** It is the error *given the
+template library*, and no six templates describe every galaxy. Measured
+against simulated truth the width came out about three times too small, so a
+floor is added in quadrature rather than the model being quoted as if it
+were right.
+
+**The estimate is the posterior mean, not the χ² minimum.** With a bimodal
+posterior the minimum sits in whichever peak happens to be a hair deeper and
+flips between them on noise.
+
+The library also reports the redshifts at which the break actually lies
+inside one of the filters. Outside that range the colours change slowly with
+redshift and dust can imitate the continuum slope; that is where the errors
+live, and it is a property of the filter set rather than of any algorithm.
+
+### The filter count is the whole story
+
+With `g, r, i` there are two colours and at least three unknowns — redshift,
+spectral type, dust. The problem is underdetermined, and no care in the fit
+changes that. What care does is make the failure visible: measured on 400
+galaxies drawn from spectra the library does not contain, three filters give
+a 22% catastrophic-outlier rate and five give 2.8%.
+
+The templates the simulator draws from have *continuous* age, dust and
+emission parameters while the fit library has six discrete entries, so no
+simulated galaxy is ever exactly reproducible by the fit. That is the
+situation with real galaxies, and it is the only way the measured scatter
+means anything rather than measuring a lookup.
+
+### What it replaces
+
+Every distance-dependent quantity — physical size, absolute magnitude,
+luminosity — previously inherited one assumed redshift for a whole field.
+Each galaxy now carries its own, with its own error, and the report's
+assumptions section says how many were measured rather than assumed. A
+galaxy whose photo-z is unreliable still gets one, and everything derived
+from it carries the flag that says so.
+
 ## Knowing what is already known
 
 Everything this package calls a *candidate* rests on one unstated claim: that

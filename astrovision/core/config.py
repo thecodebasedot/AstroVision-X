@@ -362,6 +362,18 @@ class ClusteringConfig(_Section):
 
 
 @dataclass
+class PhotoZConfig(_Section):
+    """Photometric redshifts from the multi-band colours."""
+
+    enabled: bool = True
+    z_min: float = 0.0
+    z_max: float = 1.5
+    n_z: int = 150
+    min_snr: float = 5.0
+    bands: Optional[List[str]] = None      # defaults to the bands measured
+
+
+@dataclass
 class CosmologyConfig(_Section):
     """Cosmological parameters used by the astrophysics layer."""
 
@@ -405,6 +417,7 @@ class AstroVisionConfig(_Section):
     moving: MovingObjectConfig = field(default_factory=MovingObjectConfig)
     lensing: LensingConfig = field(default_factory=LensingConfig)
     clustering: ClusteringConfig = field(default_factory=ClusteringConfig)
+    photoz: PhotoZConfig = field(default_factory=PhotoZConfig)
     cosmology: CosmologyConfig = field(default_factory=CosmologyConfig)
     report: ReportConfig = field(default_factory=ReportConfig)
 

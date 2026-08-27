@@ -19,7 +19,7 @@ those are the properties every downstream test depends on.
 
 from __future__ import annotations
 
-from typing import Dict, Mapping, Optional, Sequence
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -117,6 +117,37 @@ def stellar_colours(temperature_index: float) -> Dict[str, float]:
     weight = position - low
     colours = (1.0 - weight) * STELLAR_LOCUS[low] + weight * STELLAR_LOCUS[high]
     return _colours_to_offsets(colours)
+
+
+def sed_colours(kind: str, bands: Sequence[str], redshift: float,
+                rng: Optional[np.random.Generator] = None
+                ) -> Tuple[Dict[str, float], Dict[str, Any]]:
+    """Magnitude offsets from ``r`` computed by integrating a real spectrum.
+
+    The table-driven :func:`object_colours` is a lookup with a linear
+    reddening term, which is fine for a fixed-redshift field and useless for
+    testing photometric redshifts: a fit that inverts the same linear law
+    that generated the data is measuring its own arithmetic.
+
+    This path draws a spectrum with *continuous* age, dust and emission
+    parameters and integrates it through the filter curves, so no simulated
+    galaxy is exactly reproducible by the six discrete templates the fit
+    searches -- which is the situation with real galaxies.
+    """
+    from ..photoz.templates import draw_template
+
+    rng = rng or np.random.default_rng()
+    template = draw_template(rng, "galaxy" if kind == "galaxy" else kind)
+    magnitudes = template.magnitudes(float(redshift), tuple(bands))
+    reference = magnitudes.get("r")
+    if reference is None or not np.isfinite(reference):
+        finite = [v for v in magnitudes.values() if np.isfinite(v)]
+        reference = float(np.mean(finite)) if finite else 0.0
+    offsets = {band: float(value - reference) for band, value in magnitudes.items()}
+    truth = {"redshift": float(redshift), "template": template.name,
+             "age_gyr": template.age_gyr, "dust": template.dust,
+             "emission": template.emission}
+    return offsets, truth
 
 
 def object_colours(kind: str, morphology: str = "", *,

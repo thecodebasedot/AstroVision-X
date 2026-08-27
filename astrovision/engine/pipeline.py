@@ -40,6 +40,7 @@ from ..morphology import MorphologyAnalyzer
 from ..moving import MovingObjectFinder
 from ..photometry import Photometer
 from ..photometry.multiband import forced_photometry, measure_colours
+from ..photoz import PhotoZLibrary, fit_catalog
 from ..preprocess import Preprocessor
 from ..preprocess.psf import build_psf
 from ..segment import Segmenter
@@ -59,6 +60,11 @@ def _field_cone_of(catalog):
     """The cone covering a catalog, or ``None`` without sky coordinates."""
     from ..io.external import field_cone
     return field_cone(catalog)
+
+
+def _band_order(band: str) -> int:
+    """Sort key putting known filters blue to red and unknown ones last."""
+    return BAND_SEQUENCE.index(band) if band in BAND_SEQUENCE else len(BAND_SEQUENCE)
 
 
 def _order_bands(images: Dict[str, Any]) -> List[str]:
@@ -300,6 +306,30 @@ class Pipeline:
             self._stage("classification", True, lambda: dict(
                 self.classifier.run(clean, analysis.catalog) and self.classifier.report),
                 analysis)
+
+            def photoz() -> Dict[str, Any]:
+                measured = sorted({band for source in analysis.catalog
+                                   for band in source.bands}, key=_band_order)
+                bands = cfg.photoz.bands or measured
+                if len(bands) < 3:
+                    analysis.warn(
+                        f"photometric redshifts need at least three filters; "
+                        f"{len(bands)} available")
+                    return {"skipped": f"only {len(bands)} band(s)"}
+                library = PhotoZLibrary(bands=bands, z_min=cfg.photoz.z_min,
+                                        z_max=cfg.photoz.z_max, n_z=cfg.photoz.n_z)
+                report = fit_catalog(analysis.catalog, library,
+                                     min_snr=cfg.photoz.min_snr)
+                if len(bands) < 5:
+                    analysis.warn(
+                        f"photometric redshifts from {len(bands)} filters: with "
+                        "fewer than five the redshift, spectral type and dust are "
+                        "not separable and the outlier rate is high")
+                return report
+
+            self._stage("photoz",
+                        cfg.photoz.enabled and any(s.bands for s in analysis.catalog),
+                        photoz, analysis)
 
             def crossmatch() -> Dict[str, Any]:
                 service = self._reference_service()

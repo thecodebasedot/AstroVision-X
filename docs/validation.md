@@ -507,6 +507,39 @@ produces no arcs and no ring, which is the property that matters most.
 
 Tests: `TestLensing::*`.
 
+## Photometric redshifts
+
+**Setup.** 400 galaxies per configuration, each drawn from a spectrum with
+continuous age, dust and emission parameters — so none of them is in the
+six-template fit library. Metric is `Δz/(1+z)`; an outlier is `|Δz/(1+z)| >
+0.15`; the scatter quoted is the robust spread of the non-outliers.
+
+| Filters | Colour error | Bias | Scatter | Outliers |
+| --- | --- | --- | --- | --- |
+| g r i | 0.02 | −0.005 | 0.043 | **22.2 %** |
+| g r i | 0.10 | −0.005 | 0.070 | 19.8 % |
+| g r i z | 0.02 | −0.005 | 0.021 | 11.0 % |
+| g r i z | 0.10 | −0.006 | 0.044 | 13.5 % |
+| u g r i z | 0.02 | −0.003 | **0.015** | **2.8 %** |
+| u g r i z | 0.10 | +0.001 | 0.034 | 4.0 % |
+
+The filter count dominates everything else. Three filters give two colours
+against three unknowns — redshift, spectral type and dust — and the outlier
+rate reflects that rather than any deficiency in the fit.
+
+The `reliable` flag earns its place: at three filters and 0.10 mag colour
+errors it cuts the outlier rate from 19.8 % to 4.2 %, at the cost of keeping
+30 % of the sample.
+
+**End to end.** Through the full pipeline — detection, forced photometry,
+colours, fit — on a 300 × 300 five-band field with 30 galaxies at redshifts
+0.05–0.9: **bias 0.000, scatter 0.011, 9 % outliers**; on the reliable subset,
+scatter 0.005 and no outliers. All 33 fitted galaxies then carry their own
+photometric distance in the astrophysics layer instead of a field-wide
+assumption.
+
+Tests: `tests/test_photoz.py`.
+
 ## Cosmology
 
 Distances agree with Astropy's `FlatLambdaCDM(H0=70, Om0=0.3)` to machine

@@ -29,7 +29,7 @@ from .profiles import (
     spiral_pattern,
     supersample,
 )
-from .sed import flux_ratios, object_colours
+from .sed import flux_ratios, object_colours, sed_colours
 
 log = get_logger("simulate.sky")
 
@@ -609,6 +609,7 @@ class SkySimulator:
                            background: Optional[Mapping[str, float]] = None,
                            zero_point: Optional[Mapping[str, float]] = None,
                            redshift: float = 0.15,
+                           redshift_range: Optional[Tuple[float, float]] = None,
                            ) -> Tuple[Dict[str, AstroImage], List[TruthObject]]:
         """Render the same sky through several filters.
 
@@ -648,8 +649,18 @@ class SkySimulator:
         offsets: Dict[int, Dict[str, float]] = {}
         arc_offsets: Dict[int, Dict[str, float]] = {}
         for obj in truth:
-            offsets[obj.id] = object_colours(obj.kind, obj.morphology, rng=colour_rng,
-                                             redshift=redshift if obj.kind == "galaxy" else 0.0)
+            if redshift_range is not None and obj.kind == "galaxy":
+                # Each galaxy gets its own redshift and its own drawn
+                # spectrum, integrated through the filters.  This is the path
+                # that makes a photometric-redshift test mean something.
+                obj_z = float(colour_rng.uniform(*redshift_range))
+                offsets[obj.id], sed_truth = sed_colours(
+                    obj.kind, bands, obj_z, colour_rng)
+                obj.meta.update(sed_truth)
+            else:
+                offsets[obj.id] = object_colours(
+                    obj.kind, obj.morphology, rng=colour_rng,
+                    redshift=redshift if obj.kind == "galaxy" else 0.0)
             obj.meta["magnitudes"] = dict(offsets[obj.id])
             if obj.kind == "lens":
                 # The deflector is the elliptical the object's colour
