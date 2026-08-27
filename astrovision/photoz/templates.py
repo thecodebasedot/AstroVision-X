@@ -37,6 +37,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 
 from ..core.logging import get_logger
+from ..core.numeric import trapezoid
 
 log = get_logger("photoz.templates")
 
@@ -116,11 +117,11 @@ class SEDTemplate:
         result: Dict[str, float] = {}
         for band in bands:
             transmission = filter_curve(band, observed)
-            denominator = float(np.trapezoid(transmission / observed, observed))
+            denominator = float(trapezoid(transmission / observed, observed))
             if denominator <= 0:
                 result[band] = float("nan")
                 continue
-            numerator = float(np.trapezoid(flux * transmission / observed, observed))
+            numerator = float(trapezoid(flux * transmission / observed, observed))
             result[band] = (-2.5 * math.log10(numerator / denominator)
                             if numerator > 0 else float("nan"))
         return result
@@ -188,7 +189,7 @@ def build_template(age_gyr: float = 5.0, dust: float = 0.2,
             spectrum = spectrum + (local * strength * equivalent_width
                                    * profile / (sigma * math.sqrt(2 * math.pi)))
 
-    total = float(np.trapezoid(spectrum, wavelength))
+    total = float(trapezoid(spectrum, wavelength))
     if total > 0:
         spectrum = spectrum / total
     label = name or f"age{age:.2f}_dust{dust:.2f}_em{emission:.2f}"

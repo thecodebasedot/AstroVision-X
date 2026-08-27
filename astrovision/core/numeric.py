@@ -18,6 +18,18 @@ SIGMA_TO_FWHM = 2.0 * np.sqrt(2.0 * np.log(2.0))
 #: Median absolute deviation -> Gaussian sigma.
 MAD_TO_SIGMA = 1.4826
 
+# Trapezoidal integration, under whichever name the installed NumPy uses.
+#
+# NumPy 2.0 renamed ``trapz`` to ``trapezoid`` *and removed the old name*.
+# Neither name works across the range this package supports (``numpy>=1.21``):
+# ``np.trapezoid`` raises on 1.x and ``np.trapz`` raises on 2.x.  Binding it
+# once here is the only fix that covers both -- switching to either name
+# directly just trades one broken environment for the other.
+if hasattr(np, "trapezoid"):          # NumPy >= 2.0
+    trapezoid = np.trapezoid
+else:                                 # NumPy < 2.0
+    trapezoid = np.trapz              # noqa: NPY201
+
 
 def as_float_image(array: np.ndarray, copy: bool = False) -> np.ndarray:
     """Coerce input to a 2-D float64 array, collapsing trivial extra axes."""

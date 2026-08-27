@@ -8,7 +8,7 @@ on:
 
 jobs:
   test:
-    name: Python ${{ matrix.python-version }} (${{ matrix.extras }})
+    name: Python ${{ matrix.python-version }} (${{ matrix.extras }}${{ matrix.numpy && format(', numpy {0}', matrix.numpy) || '' }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -20,6 +20,17 @@ jobs:
           # never a requirement.
           - python-version: "3.11"
             extras: "minimal"
+          # The oldest NumPy the package claims to support.  Without this the
+          # floor in pyproject.toml is a promise nothing checks -- and it was
+          # broken by a call to `np.trapezoid`, which exists only on 2.x while
+          # `np.trapz`, the name it replaced, exists only on 1.x.
+          #
+          # Pinned on 3.9 because NumPy 1.21 has no wheels for 3.11: the
+          # oldest supported NumPy can only be exercised on a Python old
+          # enough to install it.
+          - python-version: "3.9"
+            extras: "minimal"
+            numpy: "1.21.6"
 
     steps:
       - uses: actions/checkout@v4
@@ -34,6 +45,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
+
+      - name: Pin the oldest supported NumPy
+        if: matrix.numpy != ''
+        run: pip install "numpy==${{ matrix.numpy }}"
 
       - name: Install (all extras)
         if: matrix.extras == 'all'
