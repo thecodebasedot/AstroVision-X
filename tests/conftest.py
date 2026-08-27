@@ -75,3 +75,51 @@ def _copy_source(source):
     """Deep-enough copy of a Source so a test cannot leak state into another."""
     import copy
     return copy.deepcopy(source)
+
+
+@pytest.fixture(scope="session")
+def multiband_field():
+    """A three-band field of the same sky, with per-band seeing.
+
+    Session-scoped because rendering three bands is the most expensive
+    fixture in the suite; every test that mutates the catalog builds its own
+    copy rather than sharing one.
+    """
+    simulator = SkySimulator(SkyConfig(
+        shape=(200, 200), n_stars=70, n_galaxies=20, n_nebulae=1, n_clusters=0,
+        n_lenses=1, n_anomalies=1, seed=77))
+    images, truth = simulator.generate_multiband(
+        ("g", "r", "i"), seeing={"g": 3.7, "r": 3.2, "i": 3.4})
+    preprocessor = Preprocessor()
+    return {band: preprocessor.run(image) for band, image in images.items()}, truth
+
+
+@pytest.fixture()
+def multiband_measured(multiband_field):
+    """``(bands, truth, catalog, segmentation)`` detected and measured in r."""
+    from astrovision.core.types import SourceCatalog
+
+    bands, truth = multiband_field
+    catalog, segmentation = Detector().detect(bands["r"])
+    fresh = SourceCatalog([_copy_source(s) for s in catalog], dict(catalog.meta))
+    Photometer().run(bands["r"], fresh, segmentation)
+    return bands, truth, fresh, segmentation
+
+
+@pytest.fixture()
+def reference_objects(multiband_field):
+    """Reference catalog entries at the true positions of the brighter stars."""
+    from astrovision.io.external import ReferenceObject
+
+    bands, truth = multiband_field
+    wcs = bands["r"].wcs
+    objects = []
+    for item in truth:
+        if item.kind != "star" or item.flux < 2000:
+            continue
+        ra, dec = wcs.pixel_to_world(item.x, item.y)
+        objects.append(ReferenceObject(
+            ra=float(ra), dec=float(dec), name=f"REF-{item.id}", catalog="TESTREF",
+            object_type="*",
+            magnitudes={"r": float(25.0 - 2.5 * __import__("math").log10(item.flux))}))
+    return objects

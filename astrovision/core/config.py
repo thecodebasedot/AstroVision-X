@@ -124,6 +124,18 @@ class PreprocessConfig(_Section):
     mask_saturated: bool = True
     saturation_level: float = float("inf")
     smooth_sigma: float = 0.0
+    #: Fit a position-dependent PSF as well as the single field-average one.
+    #: The fit validates itself against held-out stars and falls back to one
+    #: model when the field does not actually vary, so leaving this on costs
+    #: only the fit; it is off by default because that fit is not free.
+    varying_psf: bool = False
+    varying_psf_degree: int = 2
+    #: Tiles for the star selection.  4 rather than 3 by default: the
+    #: selector keeps the sharpest sources in each tile, so a tile has to be
+    #: small enough that the PSF is nearly constant inside it or the bias
+    #: erases the very variation being measured.  On a field with a real 40%
+    #: variation, 3 tiles a side found no variation and 4 found it cleanly.
+    varying_psf_regions: int = 4
 
 
 @dataclass
@@ -187,6 +199,8 @@ class MorphologyConfig(_Section):
     detect_spiral_arms: bool = True
     polar_bins: int = 128
     min_area_for_morphology: int = 12
+    uncertainty: bool = False          # bootstrap error bars; costs ~n_samples x
+    bootstrap_samples: int = 24
 
 
 @dataclass
@@ -199,6 +213,57 @@ class ClassificationConfig(_Section):
     min_confidence: float = 0.15
     use_embeddings: bool = True
     embedding_dim: int = 64
+    use_colours: bool = True           # fold the stellar locus into the decision
+    colour_weight: float = 0.8         # relative to the morphological answer
+
+
+@dataclass
+class MultiBandConfig(_Section):
+    """Forced photometry across filters and the colours derived from it."""
+
+    enabled: bool = True
+    detection_band: Optional[str] = None    # defaults to the first band given
+    aperture_arcsec: float = 1.6            # the colour aperture, not the total
+    annulus_arcsec: Tuple[float, float] = (5.0, 9.0)
+    homogenise_psf: bool = True
+    target_fwhm_arcsec: Optional[float] = None
+    use_kron: bool = False
+    min_colour_snr: float = 5.0
+    colour_pairs: Optional[List[Tuple[str, str]]] = None   # adjacent bands by default
+
+
+@dataclass
+class CalibrationConfig(_Section):
+    """Astrometric and photometric calibration against reference standards.
+
+    Both draw their reference catalog from the ``crossmatch`` backend, so
+    configuring one service serves all three uses.
+    """
+
+    astrometry: bool = False               # refit the WCS
+    photometry: bool = False               # refit the zero point
+    match_radius_arcsec: float = 5.0       # generous: the header may be wrong
+    min_matches: int = 8
+    rounds: int = 3
+    standard_radius_arcsec: float = 2.0
+    min_standards: int = 5
+    min_standard_snr: float = 20.0
+    reference_band: Optional[str] = None
+    colour_pair: Optional[Tuple[str, str]] = None
+
+
+@dataclass
+class CrossmatchConfig(_Section):
+    """Checking sources against external catalogs of known objects."""
+
+    backend: str = "none"                   # none | local | vizier | simbad
+    path: Optional[str] = None              # for the local backend
+    catalog: str = "I/355/gaiadr3"          # for VizieR
+    radius_arcsec: float = 2.0
+    max_field_radius_arcsec: float = 3600.0
+    timeout: float = 20.0
+    cache_dir: Optional[str] = None
+    cache_max_age_days: float = 30.0
 
 
 @dataclass
@@ -234,6 +299,26 @@ class TransientConfig(_Section):
     max_candidates: int = 500
     reject_dipoles: bool = True
     dipole_threshold: float = 0.35
+
+
+@dataclass
+class MovingObjectConfig(_Section):
+    """Linking difference-image detections into solar-system tracklets."""
+
+    enabled: bool = True
+    #: Rates in arcsec/hour.  The defaults span outer main belt to fast
+    #: near-Earth objects; narrowing them is the cheapest way to cut the
+    #: chance-alignment rate.
+    min_rate_arcsec_per_hour: float = 5.0
+    max_rate_arcsec_per_hour: float = 300.0
+    tolerance_pixels: float = 3.0
+    min_points: int = 3
+    max_rms_pixels: float = 2.0
+    max_arc_days: float = 1.5
+    min_score: float = 0.55
+    measure_trails: bool = True
+    min_trail_excess_pixels: float = 1.5
+    pixel_scale: float = float("nan")      # used only when the image has no WCS
 
 
 @dataclass
@@ -277,6 +362,18 @@ class ClusteringConfig(_Section):
 
 
 @dataclass
+class PhotoZConfig(_Section):
+    """Photometric redshifts from the multi-band colours."""
+
+    enabled: bool = True
+    z_min: float = 0.0
+    z_max: float = 1.5
+    n_z: int = 150
+    min_snr: float = 5.0
+    bands: Optional[List[str]] = None      # defaults to the bands measured
+
+
+@dataclass
 class CosmologyConfig(_Section):
     """Cosmological parameters used by the astrophysics layer."""
 
@@ -309,13 +406,18 @@ class AstroVisionConfig(_Section):
     detection: DetectionConfig = field(default_factory=DetectionConfig)
     segmentation: SegmentationConfig = field(default_factory=SegmentationConfig)
     photometry: PhotometryConfig = field(default_factory=PhotometryConfig)
+    multiband: MultiBandConfig = field(default_factory=MultiBandConfig)
     morphology: MorphologyConfig = field(default_factory=MorphologyConfig)
     classification: ClassificationConfig = field(default_factory=ClassificationConfig)
+    calibration: CalibrationConfig = field(default_factory=CalibrationConfig)
+    crossmatch: CrossmatchConfig = field(default_factory=CrossmatchConfig)
     anomaly: AnomalyConfig = field(default_factory=AnomalyConfig)
     transient: TransientConfig = field(default_factory=TransientConfig)
     timeseries: TimeSeriesConfig = field(default_factory=TimeSeriesConfig)
+    moving: MovingObjectConfig = field(default_factory=MovingObjectConfig)
     lensing: LensingConfig = field(default_factory=LensingConfig)
     clustering: ClusteringConfig = field(default_factory=ClusteringConfig)
+    photoz: PhotoZConfig = field(default_factory=PhotoZConfig)
     cosmology: CosmologyConfig = field(default_factory=CosmologyConfig)
     report: ReportConfig = field(default_factory=ReportConfig)
 

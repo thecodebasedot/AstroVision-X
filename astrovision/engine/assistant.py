@@ -211,8 +211,10 @@ class ResearchAssistant:
 
         if not actions:
             actions.append(
-                "Nothing in this field requires immediate follow-up. The "
-                "catalog is suitable for population statistics.")
+                "Nothing in this field cleared the follow-up thresholds. The "
+                "catalog is suitable for population statistics; lower "
+                "anomaly.contamination or transient.real_bogus_threshold to "
+                "see more marginal candidates.")
         actions.append(
             "Before publishing anything from this run, verify the astrometric "
             "solution and the photometric zero point against an external "

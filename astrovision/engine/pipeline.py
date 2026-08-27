@@ -23,18 +23,24 @@ import numpy as np
 from ..anomaly import AnomalyEngine
 from ..astrophysics import annotate_physical, field_statistics, stellar_population_summary
 from ..astrophysics.cosmology import Cosmology
+from ..calibration.astrometry import apply_solution, solve_plate
+from ..calibration.photometry import apply_zero_point, solve_zero_point
 from ..classify import Classifier
 from ..core.config import AstroVisionConfig
 from ..core.exceptions import PipelineError
 from ..core.logging import get_logger, timed
 from ..core.types import FieldAnalysis
 from ..detect import Detector
+from ..io.external import build_service, crossmatch_catalog
 from ..io.image import AstroImage, ImageSeries
 from ..lensing import LensSearch
 from ..ml.clustering import cluster, silhouette_score
 from ..ml.features import catalog_embeddings, catalog_features, feature_report
 from ..morphology import MorphologyAnalyzer
+from ..moving import MovingObjectFinder
 from ..photometry import Photometer
+from ..photometry.multiband import forced_photometry, measure_colours
+from ..photoz import PhotoZLibrary, fit_catalog
 from ..preprocess import Preprocessor
 from ..preprocess.psf import build_psf
 from ..segment import Segmenter
@@ -43,6 +49,29 @@ from ..transient import TransientDetector
 from .assistant import ResearchAssistant
 
 log = get_logger("engine.pipeline")
+
+#: Conventional blue-to-red ordering, so that a default colour pair is a
+#: colour and not its negative.  Unknown names keep their given order after
+#: the ones that are recognised.
+BAND_SEQUENCE = ("u", "g", "r", "i", "z", "y", "J", "H", "K")
+
+
+def _field_cone_of(catalog):
+    """The cone covering a catalog, or ``None`` without sky coordinates."""
+    from ..io.external import field_cone
+    return field_cone(catalog)
+
+
+def _band_order(band: str) -> int:
+    """Sort key putting known filters blue to red and unknown ones last."""
+    return BAND_SEQUENCE.index(band) if band in BAND_SEQUENCE else len(BAND_SEQUENCE)
+
+
+def _order_bands(images: Dict[str, Any]) -> List[str]:
+    """Sort band names blue to red, leaving unrecognised ones at the end."""
+    known = [b for b in BAND_SEQUENCE if b in images]
+    rest = [b for b in images if b not in known]
+    return known + rest
 
 
 @dataclass
@@ -83,11 +112,13 @@ class Pipeline:
         self.anomaly = AnomalyEngine(self.config.anomaly)
         self.lensing = LensSearch(self.config.lensing)
         self.transient = TransientDetector(self.config.transient)
+        self.moving = MovingObjectFinder(self.config.moving)
         self.timeseries = LightCurveAnalyzer(self.config.timeseries)
         self.assistant = ResearchAssistant(self.config.report.top_candidates)
         self.cosmology = Cosmology(self.config.cosmology.H0,
                                    self.config.cosmology.Om0,
                                    self.config.cosmology.Ode0)
+        self._service = None
 
     # -- stage plumbing -----------------------------------------------------
     def _stage(self, name: str, enabled: bool, work: Callable[[], Dict[str, Any]],
@@ -114,15 +145,37 @@ class Pipeline:
         self.stages.append(result)
         return result
 
+    def _reference_service(self):
+        """The external-catalog backend, built once and shared.
+
+        Calibration and the known-object crossmatch ask the same service the
+        same kind of question, so they share one instance -- and, with a cache
+        configured, one set of answers.
+        """
+        if self._service is None:
+            cfg = self.config.crossmatch
+            self._service = build_service(
+                cfg.backend, path=cfg.path, catalog=cfg.catalog,
+                timeout=cfg.timeout, cache_dir=cfg.cache_dir,
+                cache_max_age_days=cfg.cache_max_age_days)
+        return self._service
+
     # -- single-field analysis ---------------------------------------------
     def run(self, image: AstroImage, series: Optional[ImageSeries] = None,
             redshift: Optional[float] = None,
-            preprocess: bool = True) -> FieldAnalysis:
+            preprocess: bool = True,
+            bands: Optional[Dict[str, AstroImage]] = None) -> FieldAnalysis:
         """Analyse one field, optionally with a series for time-domain work.
 
         Set ``preprocess=False`` for an image that has already been
         calibrated and background-subtracted -- a stacked template, for
         instance -- so it is not subtracted a second time.
+
+        ``bands`` supplies the other filters of the same sky, keyed by band
+        name.  Detection, segmentation and morphology stay on ``image``;
+        the extra bands are measured by forced photometry at the positions
+        already found, which is the only way to get colours that mean
+        anything.  They are expected to be preprocessed already.
         """
         cfg = self.config
         self.stages = []
@@ -163,6 +216,78 @@ class Pipeline:
                                     state["segmentation"]).meta.get("photometry", {})),
                 analysis)
 
+            def calibrate() -> Dict[str, Any]:
+                service = self._reference_service()
+                cone = _field_cone_of(analysis.catalog)
+                if cone is None:
+                    analysis.warn("calibration needs sky coordinates; skipped")
+                    return {"skipped": "no WCS"}
+                reference = service.query(*cone)
+                if not reference:
+                    analysis.warn("no reference standards returned; the WCS and "
+                                  "zero point are the header's, not measured")
+                    return {"n_reference": 0}
+                out: Dict[str, Any] = {"n_reference": len(reference)}
+                if cfg.calibration.astrometry and clean.wcs is not None:
+                    solution = solve_plate(
+                        analysis.catalog, reference, clean.wcs,
+                        radius_arcsec=cfg.calibration.match_radius_arcsec,
+                        min_matches=cfg.calibration.min_matches,
+                        rounds=cfg.calibration.rounds)
+                    out["astrometry"] = solution.to_dict()
+                    if solution.succeeded:
+                        clean.wcs = solution.wcs
+                        apply_solution(analysis.catalog, solution)
+                    else:
+                        analysis.warn(f"plate solution failed: {solution.reason}")
+                if cfg.calibration.photometry:
+                    solution = solve_zero_point(
+                        analysis.catalog, reference, band=clean.band or "",
+                        reference_band=cfg.calibration.reference_band,
+                        colour_pair=(tuple(cfg.calibration.colour_pair)
+                                     if cfg.calibration.colour_pair else None),
+                        radius_arcsec=cfg.calibration.standard_radius_arcsec,
+                        min_standards=cfg.calibration.min_standards,
+                        min_snr=cfg.calibration.min_standard_snr)
+                    out["photometry"] = solution.to_dict()
+                    if solution.succeeded:
+                        apply_zero_point(analysis.catalog, solution, clean.band or "")
+                    else:
+                        analysis.warn(f"zero point not calibrated: {solution.reason}")
+                return out
+
+            self._stage("calibration",
+                        cfg.calibration.astrometry or cfg.calibration.photometry,
+                        calibrate, analysis)
+
+            def multiband() -> Dict[str, Any]:
+                images = dict(bands or {})
+                images.setdefault(clean.band or "detection", clean)
+                if len(images) < 2:
+                    return {"skipped": "only one band supplied"}
+                report = forced_photometry(
+                    images, analysis.catalog,
+                    detection_band=(cfg.multiband.detection_band
+                                    or clean.band or "detection"),
+                    aperture_arcsec=cfg.multiband.aperture_arcsec,
+                    homogenise_psf=cfg.multiband.homogenise_psf,
+                    target_fwhm_arcsec=cfg.multiband.target_fwhm_arcsec,
+                    use_kron=cfg.multiband.use_kron,
+                    segmentation=state["segmentation"],
+                    annulus_arcsec=tuple(cfg.multiband.annulus_arcsec))
+                pairs = cfg.multiband.colour_pairs
+                if not pairs:
+                    ordered = _order_bands(images)
+                    pairs = list(zip(ordered[:-1], ordered[1:]))
+                counts = measure_colours(analysis.catalog, pairs,
+                                         cfg.multiband.min_colour_snr)
+                for message in report.warnings:
+                    analysis.warn(f"multi-band: {message}")
+                return {**report.to_dict(), "colours": counts}
+
+            self._stage("multiband", cfg.multiband.enabled and bool(bands),
+                        multiband, analysis)
+
             def segment() -> Dict[str, Any]:
                 components = self.segmenter.run(clean, analysis.catalog,
                                                 state["segmentation"])
@@ -181,6 +306,47 @@ class Pipeline:
             self._stage("classification", True, lambda: dict(
                 self.classifier.run(clean, analysis.catalog) and self.classifier.report),
                 analysis)
+
+            def photoz() -> Dict[str, Any]:
+                measured = sorted({band for source in analysis.catalog
+                                   for band in source.bands}, key=_band_order)
+                bands = cfg.photoz.bands or measured
+                if len(bands) < 3:
+                    analysis.warn(
+                        f"photometric redshifts need at least three filters; "
+                        f"{len(bands)} available")
+                    return {"skipped": f"only {len(bands)} band(s)"}
+                library = PhotoZLibrary(bands=bands, z_min=cfg.photoz.z_min,
+                                        z_max=cfg.photoz.z_max, n_z=cfg.photoz.n_z)
+                report = fit_catalog(analysis.catalog, library,
+                                     min_snr=cfg.photoz.min_snr)
+                if len(bands) < 5:
+                    analysis.warn(
+                        f"photometric redshifts from {len(bands)} filters: with "
+                        "fewer than five the redshift, spectral type and dust are "
+                        "not separable and the outlier rate is high")
+                return report
+
+            self._stage("photoz",
+                        cfg.photoz.enabled and any(s.bands for s in analysis.catalog),
+                        photoz, analysis)
+
+            def crossmatch() -> Dict[str, Any]:
+                service = self._reference_service()
+                report = crossmatch_catalog(
+                    analysis.catalog, service,
+                    radius_arcsec=cfg.crossmatch.radius_arcsec,
+                    max_field_radius_arcsec=cfg.crossmatch.max_field_radius_arcsec)
+                if report.error:
+                    analysis.warn(f"external crossmatch: {report.error}")
+                if not report.conclusive:
+                    analysis.warn(
+                        "no external catalog was consulted, so nothing in this "
+                        "field has been shown to be previously unknown")
+                return report.to_dict()
+
+            self._stage("crossmatch", cfg.crossmatch.backend not in ("none", "", None),
+                        crossmatch, analysis)
 
             def embed() -> Dict[str, Any]:
                 # Morphology can change which sources are worth embedding, so
@@ -212,13 +378,37 @@ class Pipeline:
 
                 self._stage("transient", cfg.transient.enabled, transients, analysis)
 
+                def movers() -> Dict[str, Any]:
+                    per_epoch = getattr(self.transient, "per_epoch", None)
+                    if not per_epoch:
+                        return {"skipped": "the transient stage produced no detections"}
+                    result = self.moving.run(
+                        series, per_epoch,
+                        getattr(self.transient, "differences", None))
+                    analysis.tracklets = result.tracklets
+                    if result.tracklets:
+                        analysis.warn(
+                            f"{len(result.tracklets)} moving-object tracklet(s) found; "
+                            "each needs an orbit and a Minor Planet Center check "
+                            "before it is an object, let alone a new one")
+                    # Movers are demoted inside the transient list rather than
+                    # removed, so the evidence behind the interpretation stays
+                    # visible to anyone who disagrees with it.
+                    analysis.transients = [
+                        c for c in analysis.transients
+                        if "moving_object" not in c.flags] + [
+                        c for c in analysis.transients if "moving_object" in c.flags]
+                    return dict(self.moving.report)
+
+                self._stage("moving", cfg.moving.enabled, movers, analysis)
+
                 def light_curves() -> Dict[str, Any]:
                     analysis.light_curves = self.timeseries.run(series, analysis.catalog)
                     return dict(self.timeseries.report)
 
                 self._stage("timeseries", cfg.timeseries.enabled, light_curves, analysis)
             else:
-                for name in ("transient", "timeseries"):
+                for name in ("transient", "moving", "timeseries"):
                     self.stages.append(StageResult(
                         name=name, status="skipped",
                         message="needs a multi-epoch series"))

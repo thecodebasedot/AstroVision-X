@@ -32,11 +32,89 @@ class SimpleWCS:
     crval: Tuple[float, float] = (0.0, 0.0)
     cd: Optional[np.ndarray] = None
     ctype: Tuple[str, str] = ("RA---TAN", "DEC--TAN")
+    #: SIP forward distortion, ``a[p, q]`` multiplying ``u**p * v**q``.
+    sip_a: Optional[np.ndarray] = None
+    sip_b: Optional[np.ndarray] = None
+    #: SIP reverse distortion.  Optional: when absent the inverse is found
+    #: by iteration, which is exact to well below a milli-pixel and avoids
+    #: depending on coefficients many real headers simply do not carry.
+    sip_ap: Optional[np.ndarray] = None
+    sip_bp: Optional[np.ndarray] = None
 
     def __post_init__(self) -> None:
         if self.cd is None:
             self.cd = np.array([[-1.0 / 3600.0, 0.0], [0.0, 1.0 / 3600.0]])
         self.cd = np.asarray(self.cd, dtype=float).reshape(2, 2)
+        for name in ("sip_a", "sip_b", "sip_ap", "sip_bp"):
+            value = getattr(self, name)
+            if value is not None:
+                setattr(self, name, np.asarray(value, dtype=float))
+
+    # -- distortion --------------------------------------------------------
+    @property
+    def has_distortion(self) -> bool:
+        return self.sip_a is not None and self.sip_b is not None
+
+    def _sip_shift(self, u: np.ndarray, v: np.ndarray,
+                   a: Optional[np.ndarray], b: Optional[np.ndarray]
+                   ) -> Tuple[np.ndarray, np.ndarray]:
+        """Polynomial offsets ``(f, g)`` for pixel offsets from the reference.
+
+        The SIP convention (Shupe et al. 2005) writes the distortion as a
+        polynomial in the *offset from CRPIX*, added to that offset before
+        the linear CD matrix is applied.  Getting that order wrong is the
+        classic SIP bug: applying the polynomial to absolute pixel
+        coordinates leaves an error that grows across the detector and looks
+        exactly like a bad plate scale.
+        """
+        du = np.zeros_like(u, dtype=float)
+        dv = np.zeros_like(v, dtype=float)
+        for coefficients, out in ((a, du), (b, dv)):
+            if coefficients is None:
+                continue
+            for p in range(coefficients.shape[0]):
+                for q in range(coefficients.shape[1]):
+                    value = coefficients[p, q]
+                    if value:
+                        out += value * (u ** p) * (v ** q)
+        return du, dv
+
+    def apply_distortion(self, u, v) -> Tuple[np.ndarray, np.ndarray]:
+        """Add the forward SIP distortion to offsets from the reference pixel."""
+        u = np.asarray(u, dtype=float)
+        v = np.asarray(v, dtype=float)
+        if not self.has_distortion:
+            return u, v
+        du, dv = self._sip_shift(u, v, self.sip_a, self.sip_b)
+        return u + du, v + dv
+
+    def remove_distortion(self, u, v, iterations: int = 12,
+                          tolerance: float = 1e-7) -> Tuple[np.ndarray, np.ndarray]:
+        """Invert the forward distortion.
+
+        Uses the reverse coefficients when the header supplied them, and
+        otherwise iterates ``u_undistorted = u - f(u_undistorted)`` to a
+        fixed point.  The iteration converges because SIP distortions are
+        small perturbations by construction -- a few pixels over a detector
+        thousands across -- so the map is a contraction.
+        """
+        u = np.asarray(u, dtype=float)
+        v = np.asarray(v, dtype=float)
+        if not self.has_distortion:
+            return u, v
+        if self.sip_ap is not None and self.sip_bp is not None:
+            du, dv = self._sip_shift(u, v, self.sip_ap, self.sip_bp)
+            return u + du, v + dv
+        guess_u, guess_v = u.copy(), v.copy()
+        for _ in range(int(iterations)):
+            du, dv = self._sip_shift(guess_u, guess_v, self.sip_a, self.sip_b)
+            next_u, next_v = u - du, v - dv
+            shift = max(float(np.max(np.abs(next_u - guess_u))) if next_u.size else 0.0,
+                        float(np.max(np.abs(next_v - guess_v))) if next_v.size else 0.0)
+            guess_u, guess_v = next_u, next_v
+            if shift < tolerance:
+                break
+        return guess_u, guess_v
 
     # -- construction ------------------------------------------------------
     @classmethod
@@ -60,7 +138,10 @@ class SimpleWCS:
                 [cdelt1 * math.sin(rot), cdelt2 * math.cos(rot)],
             ])
         ctype = (str(header.get("CTYPE1", "RA---TAN")), str(header.get("CTYPE2", "DEC--TAN")))
-        return cls(crpix, crval, cd, ctype)
+        sip = {name: _sip_from_header(header, letter)
+               for name, letter in (("sip_a", "A"), ("sip_b", "B"),
+                                    ("sip_ap", "AP"), ("sip_bp", "BP"))}
+        return cls(crpix, crval, cd, ctype, **sip)
 
     @classmethod
     def tangent(cls, ra: float, dec: float, shape: Tuple[int, int],
@@ -92,6 +173,7 @@ class SimpleWCS:
         """Convert 0-based pixel coordinates to ``(ra, dec)`` in degrees."""
         dx = np.asarray(x, dtype=float) + 1.0 - self.crpix[0]
         dy = np.asarray(y, dtype=float) + 1.0 - self.crpix[1]
+        dx, dy = self.apply_distortion(dx, dy)
         xi = np.radians(self.cd[0, 0] * dx + self.cd[0, 1] * dy)
         eta = np.radians(self.cd[1, 0] * dx + self.cd[1, 1] * dy)
         ra0 = math.radians(self.crval[0])
@@ -117,6 +199,7 @@ class SimpleWCS:
         inv = np.linalg.inv(self.cd)
         dx = inv[0, 0] * xi + inv[0, 1] * eta
         dy = inv[1, 0] * xi + inv[1, 1] * eta
+        dx, dy = self.remove_distortion(dx, dy)
         return dx + self.crpix[0] - 1.0, dy + self.crpix[1] - 1.0
 
     def separation_arcsec(self, x1, y1, x2, y2) -> np.ndarray:
@@ -126,13 +209,23 @@ class SimpleWCS:
         return angular_separation(ra1, dec1, ra2, dec2) * 3600.0
 
     def to_header(self) -> Dict[str, Any]:
-        return {
+        header: Dict[str, Any] = {
             "CTYPE1": self.ctype[0], "CTYPE2": self.ctype[1],
             "CRPIX1": self.crpix[0], "CRPIX2": self.crpix[1],
             "CRVAL1": self.crval[0], "CRVAL2": self.crval[1],
             "CD1_1": self.cd[0, 0], "CD1_2": self.cd[0, 1],
             "CD2_1": self.cd[1, 0], "CD2_2": self.cd[1, 1],
         }
+        if self.has_distortion:
+            # The -SIP suffix on CTYPE is what tells any other reader that
+            # the coefficients are there and must be applied; without it a
+            # conforming reader is right to ignore them.
+            header["CTYPE1"] = _with_sip_suffix(self.ctype[0])
+            header["CTYPE2"] = _with_sip_suffix(self.ctype[1])
+            for letter, coefficients in (("A", self.sip_a), ("B", self.sip_b),
+                                         ("AP", self.sip_ap), ("BP", self.sip_bp)):
+                header.update(_sip_to_header(coefficients, letter))
+        return header
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -140,6 +233,48 @@ class SimpleWCS:
             "cd": self.cd.tolist(), "ctype": list(self.ctype),
             "pixel_scale_arcsec": self.pixel_scale,
         }
+
+
+def _with_sip_suffix(ctype: str) -> str:
+    return ctype if ctype.endswith("-SIP") else ctype + "-SIP"
+
+
+def _sip_from_header(header: Dict[str, Any], letter: str) -> Optional[np.ndarray]:
+    """Read ``A_p_q`` style coefficients into a dense array."""
+    order = header.get(f"{letter}_ORDER")
+    keys = [k for k in header if k.startswith(f"{letter}_") and k != f"{letter}_ORDER"]
+    terms: Dict[Tuple[int, int], float] = {}
+    for key in keys:
+        parts = key.split("_")
+        if len(parts) != 3:
+            continue
+        try:
+            p, q = int(parts[1]), int(parts[2])
+        except ValueError:
+            continue
+        terms[(p, q)] = float(header[key])
+    if not terms:
+        return None
+    size = int(order) + 1 if order is not None else max(max(p, q) for p, q in terms) + 1
+    coefficients = np.zeros((size, size), dtype=float)
+    for (p, q), value in terms.items():
+        if p < size and q < size:
+            coefficients[p, q] = value
+    return coefficients
+
+
+def _sip_to_header(coefficients: Optional[np.ndarray], letter: str) -> Dict[str, Any]:
+    """Write a coefficient array back as ``A_ORDER`` plus ``A_p_q`` keys."""
+    if coefficients is None:
+        return {}
+    array = np.asarray(coefficients, dtype=float)
+    order = array.shape[0] - 1
+    header: Dict[str, Any] = {f"{letter}_ORDER": order}
+    for p in range(array.shape[0]):
+        for q in range(array.shape[1]):
+            if array[p, q]:
+                header[f"{letter}_{p}_{q}"] = float(array[p, q])
+    return header
 
 
 def angular_separation(ra1, dec1, ra2, dec2) -> np.ndarray:

@@ -103,7 +103,19 @@ def flux_scale_factor(science: np.ndarray, reference: np.ndarray,
 
 def subtract(science: AstroImage, reference: AstroImage, align: bool = True,
              psf_match: bool = True, scale_flux: bool = True) -> DifferenceResult:
-    """Produce ``science - reference`` after alignment, PSF matching and scaling."""
+    """Produce ``science - reference`` after alignment, PSF matching and scaling.
+
+    Matching uses one kernel for the whole frame, deliberately.  A
+    position-dependent kernel is the obvious next step where the PSF varies,
+    and it was built and measured here: tiled matching -- with hard tile
+    edges, with smooth inverse-distance blending, and with the template's own
+    spatial PSF refitted rather than inherited -- made the spurious candidate
+    count *worse* in every variant, from 18 to between 45 and 114 on the same
+    field.  It is not shipped.  The honest reading is that a matching kernel
+    good enough to beat one global kernel has to be derived from the
+    difference itself, in the manner of a proper image-subtraction basis, and
+    that is a larger piece of work than a tiling.
+    """
     science_data = science.subtracted()
     reference_data = reference.subtracted()
     diagnostics: Dict[str, Any] = {}
@@ -207,6 +219,12 @@ def build_template(series, method: str = "median", exclude: Optional[int] = None
     # Combining N epochs reduces the noise by roughly sqrt(N).
     template.background_rms = base.rms_map() / np.sqrt(max(len(images), 1))
     template.meta = dict(base.meta)
+    # A stack does not inherit one epoch's PSF.  Co-adding frames of
+    # different seeing produces a PSF that is none of them, and a spatial
+    # model carried over from the first epoch describes the template
+    # nowhere -- matching against it puts a residual at every source, which
+    # is precisely the failure this whole path exists to remove.
+    template.meta.pop("varying_psf", None)
     masks = [im.mask for im in images if im.mask is not None]
     if masks:
         # A pixel bad in any contributing epoch is suspect in the stack.

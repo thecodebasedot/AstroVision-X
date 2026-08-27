@@ -47,6 +47,29 @@ for line in analysis.statistics["narrative"]["priority_text"][:3]:
     print(line)
 ```
 
+```python
+# Several filters of the same sky, and a check against what is already known
+from astrovision import Pipeline
+from astrovision.core.config import AstroVisionConfig
+from astrovision.simulate import SkyConfig, SkySimulator
+from astrovision.preprocess import Preprocessor
+
+images, truth = SkySimulator(SkyConfig(seed=7)).generate_multiband(("g", "r", "i"))
+bands = {name: Preprocessor().run(image) for name, image in images.items()}
+
+config = AstroVisionConfig()
+config.crossmatch.backend = "vizier"          # or "local" with a path, or "none"
+config.crossmatch.cache_dir = ".astrovision-cache"
+config.calibration.astrometry = True
+config.calibration.photometry = True
+
+analysis = Pipeline(config).run(bands["r"], bands=bands, preprocess=False)
+for source in analysis.catalog:
+    if "known" in source.flags:
+        known = source.meta["known_object"]
+        print(f"source {source.id} is {known['name']}, a {known['described_type']}")
+```
+
 ---
 
 ## What it does
@@ -147,11 +170,34 @@ for line in analysis.statistics["narrative"]["priority_text"][:3]:
 | Spiral arms | Fourier modes in log-polar space, confirmed by phase winding |
 | Bars | The same `m = 2` mode, distinguished by *constant* phase |
 
+### Multiple filters
+
+| Task | Method |
+| --- | --- |
+| Forced photometry | One aperture, defined once, applied at the same *sky* position in every band |
+| Seeing homogenisation | Every band convolved to the worst PSF in the set, in arcsec |
+| Colours | Recorded only when both bands clear a signal-to-noise floor; one-sided limits otherwise |
+| Stellar locus | Fitted from the field's own point sources, not from a table |
+| Photometric redshift | Template fit over a redshift grid, with a bimodal posterior reported |
+| Colour classification | Likelihood ratio between two field-calibrated populations |
+
+### Calibration
+
+| Task | Method |
+| --- | --- |
+| Plate solution | Iterative mutual-nearest matching, then a linear fit in the tangent plane |
+| Distortion | SIP forward coefficients, inverse by fixed-point iteration |
+| Zero point | Robust fit against catalogued standards, with a colour term |
+| Known objects | One cone search per field against Gaia / SIMBAD / a local file |
+| Uncertainty | Parameter covariance from the fit; parametric bootstrap for the rest |
+| Probabilities | Isotonic or Platt calibration, chosen by how much labelled data there is |
+
 ### Discovery
 
 | Search | Method |
 | --- | --- |
 | Transients | Hold-one-out templates, PSF matching, veto-style real/bogus vetting |
+| Solar-system objects | Tracklet linking across epochs, confirmed by within-exposure trails |
 | Variability | Reduced χ², Stetson J, von Neumann η, Lomb–Scargle periods |
 | Novelty | Isolation forest + autoencoder + k-NN isolation, rank-combined |
 | Strong lensing | Tangential arcs at a shared radius; radial scan for full rings |
@@ -172,10 +218,18 @@ bad columns. They are *not* claims about real survey data.
 | Astrometric precision | 0.15 px median |
 | Photometric accuracy (isolated stars) | within 3 %, 3 % scatter |
 | PSF FWHM recovery | 6 % median error |
+| Centre-to-corner photometry gap | 2.2 % → 0.1 % with a position-dependent PSF |
 | Sérsic index recovery | 11 % median error |
 | Star/galaxy separation | 90 % (100 % for galaxies at S/N > 10) |
+| Multi-band colour accuracy | −0.009 mag bias, 0.060 mag scatter at S/N > 15 |
+| Astrometric solution | 3.5″ header error → 0.047″, 0.110″ rms |
+| Photometric zero point | 24.987 ± 0.002 against a true 25.000 |
+| Probability calibration | expected calibration error 0.112 → 0.027 |
+| Photometric redshift (5 filters) | scatter 0.015 in Δz/(1+z), 2.8 % outliers |
+| Photometric redshift (3 filters) | scatter 0.043, 22 % outliers — the filter count dominates |
 | Galaxy morphology (5 classes) | 59 % exact, 78 % at family level |
 | Transient recall | 12/14, with 2 spurious over five fields |
+| Moving-object recall | 10/10, 0 spurious over ten fields |
 | Strong-lens recall | 8/14, with 3 false positives over five fields |
 | CNN stamp classification | 85 % on a 266-stamp training set |
 | LSTM light-curve classification | 92 % over six variability classes |
@@ -183,8 +237,39 @@ bad columns. They are *not* claims about real survey data.
 Known limits, stated plainly: nebula and star-cluster classification is weak
 (they overlap galaxies in every measured statistic); the PSF is unreliable in
 fields where galaxies outnumber stars several to one, and the pipeline warns
-when that happens; and single-band lens searching cannot use the colour
-information real searches rely on.
+when that happens; formal photometric errors run about 2.5 times too small,
+because they count photon and read noise but not sky estimation, blending or
+PSF-matching residuals; and Sérsic fits are effectively degenerate in
+`n` against `r_eff`, which is why they carry a correlation and a flag rather
+than a bare index.
+
+Colour is the case worth spelling out. Adding it to star/galaxy separation
+changes 93.9 % to 93.7 % — one object in 442, which is to say nothing. At
+this depth the colour errors are comparable to how far galaxies sit off the
+stellar locus, so there is little to learn, and the machinery says so: it
+measures its own separation on each field and weights itself accordingly,
+down to zero. In a deeper variant the same code gives 94.1 % → 95.1 %. The
+capability is there and self-gating; the honest claim today is that it costs
+nothing and will pay off with better photometry.
+
+---
+
+## Gallery
+
+Every image below is produced by `examples/04_make_figures.py`, which runs the
+real pipeline on a simulated field and plots what each stage returned. Nothing
+is drawn by hand.
+
+| | |
+| --- | --- |
+| ![Detections](figures/01_field_detections.png) | **Detection and classification.** The field before and after background subtraction, with every detection circled and coloured by class. |
+| ![Stages](figures/02_pipeline_stages.png) | **Preprocessing.** Raw frame, the fitted background model, the subtracted image, and the deblended segmentation. |
+| ![Morphology](figures/03_galaxy_morphology.png) | **Galaxy morphology.** Injected type against measured type, with Sérsic *n*, concentration, asymmetry, Gini/M20 and arm count. |
+| ![Transients](figures/04_transient_discovery.png) | **Transient search.** Template, new epoch and difference, held on a single intensity scale so the residual is comparable to the source it came from. |
+| ![Light curves](figures/05_light_curves.png) | **Light curves.** Photometry recovered from the epoch stack, against the injected curve. |
+| ![Anomalies](figures/06_anomalies.png) | **Novelty search.** The highest-ranked outliers, each with the written reason it was flagged. |
+| ![Lens](figures/07_lens_candidate.png) | **Lens candidate.** Deflector, the same cutout with smooth galaxy light removed, and the tangential arcs with a fitted Einstein radius. |
+| ![Report](figures/08_html_report.png) | **The written report.** What the research assistant produces for a field, including the ranked follow-up list. |
 
 ---
 

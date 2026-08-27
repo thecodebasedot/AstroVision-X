@@ -9,8 +9,9 @@ morphology and transient stages be validated quantitatively.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -28,6 +29,7 @@ from .profiles import (
     spiral_pattern,
     supersample,
 )
+from .sed import flux_ratios, object_colours, sed_colours
 
 log = get_logger("simulate.sky")
 
@@ -75,6 +77,11 @@ class SkyConfig:
     psf: str = "moffat"                    # moffat | gaussian
     background: float = 120.0              # counts / pixel
     background_gradient: float = 0.06      # fractional across the field
+    #: Fractional growth of the seeing width from the optical axis to the
+    #: field corner.  0.2 means the corners are 20% blurrier than the centre,
+    #: which is a mild but entirely typical amount for a wide-field camera.
+    seeing_variation: float = 0.0
+    optical_axis: Optional[Tuple[float, float]] = None   # defaults to the centre
     read_noise: float = 5.0
     gain: float = 2.0                      # e-/count, sets Poisson scaling
     saturation: float = 60_000.0
@@ -108,6 +115,12 @@ class SkySimulator:
     def __init__(self, config: Optional[SkyConfig] = None):
         self.config = config or SkyConfig()
         self.rng = np.random.default_rng(self.config.seed)
+        # Detector effects draw from their own stream so a field can be
+        # re-rendered with identical sources but independent noise -- which
+        # is exactly what a second filter of the same sky looks like.  It
+        # defaults to the source stream, leaving single-band output
+        # bit-for-bit as it was.
+        self._noise_rng = self.rng
         self._next_id = 1
 
     # -- helpers -----------------------------------------------------------
@@ -116,13 +129,35 @@ class SkySimulator:
         self._next_id += 1
         return value
 
-    def _psf_stamp(self, shape, centre, amplitude: float) -> np.ndarray:
-        cfg = self.config
-        if cfg.psf == "gaussian":
-            return gaussian_psf(shape, centre, cfg.seeing_fwhm, amplitude)
-        return moffat_psf(shape, centre, cfg.seeing_fwhm, 3.2, amplitude)
+    def local_fwhm(self, x: float, y: float) -> float:
+        """Seeing width at a field position.
 
-    def _psf_kernel(self, size: int = 0) -> np.ndarray:
+        Real optics degrade off-axis, so a PSF measured at the centre does
+        not describe the corners.  The model here is the simple one that
+        matches what a telescope actually does: the width grows with the
+        square of the distance from the optical axis, since defocus and
+        field curvature are both second-order in field angle.
+        """
+        cfg = self.config
+        if not cfg.seeing_variation:
+            return float(cfg.seeing_fwhm)
+        ny, nx = cfg.shape
+        ox = cfg.optical_axis[0] if cfg.optical_axis else (nx - 1) / 2.0
+        oy = cfg.optical_axis[1] if cfg.optical_axis else (ny - 1) / 2.0
+        half_diagonal = 0.5 * math.hypot(nx, ny)
+        radius = math.hypot(float(x) - ox, float(y) - oy) / max(half_diagonal, 1e-9)
+        return float(cfg.seeing_fwhm * (1.0 + cfg.seeing_variation * radius ** 2))
+
+    def _psf_stamp(self, shape, centre, amplitude: float,
+                   position: Optional[Tuple[float, float]] = None) -> np.ndarray:
+        cfg = self.config
+        fwhm = self.local_fwhm(*position) if position is not None else cfg.seeing_fwhm
+        if cfg.psf == "gaussian":
+            return gaussian_psf(shape, centre, fwhm, amplitude)
+        return moffat_psf(shape, centre, fwhm, 3.2, amplitude)
+
+    def _psf_kernel(self, size: int = 0,
+                    position: Optional[Tuple[float, float]] = None) -> np.ndarray:
         """Normalised convolution kernel matching the configured seeing.
 
         Extended objects must be blurred by the *same* PSF as the stars,
@@ -131,10 +166,10 @@ class SkySimulator:
         """
         cfg = self.config
         if not size:
-            size = int(2 * np.ceil(4.0 * cfg.seeing_fwhm) + 1)
+            size = int(2 * np.ceil(4.0 * cfg.seeing_fwhm * (1.0 + cfg.seeing_variation)) + 1)
         size = max(5, int(size) | 1)
         centre = ((size - 1) / 2.0, (size - 1) / 2.0)
-        kernel = self._psf_stamp((size, size), centre, 1.0)
+        kernel = self._psf_stamp((size, size), centre, 1.0, position)
         total = float(kernel.sum())
         return kernel / total if total > 0 else kernel
 
@@ -153,11 +188,11 @@ class SkySimulator:
     def add_star(self, canvas: np.ndarray, x: float, y: float, flux: float,
                  variable: bool = False) -> TruthObject:
         """Render a point source convolved with the seeing PSF."""
-        half = int(np.ceil(6 * self.config.seeing_fwhm))
+        half = int(np.ceil(6 * self.local_fwhm(x, y)))
         bounds = self._stamp_bounds(x, y, half)
         if bounds is not None:
             region, centre, shape = bounds
-            stamp = self._psf_stamp(shape, centre, 1.0)
+            stamp = self._psf_stamp(shape, centre, 1.0, position=(x, y))
             total = stamp.sum()
             if total > 0:
                 canvas[region] += stamp * (flux / total)
@@ -167,6 +202,44 @@ class SkySimulator:
             truth.period = float(self.rng.uniform(0.05, 12.0))
             truth.amplitude = float(self.rng.uniform(0.08, 0.6))
         return truth
+
+    def add_mover(self, canvas: np.ndarray, x: float, y: float, flux: float,
+                  trail_length: float = 0.0, trail_angle: float = 0.0) -> TruthObject:
+        """Render a moving object, trailed by its motion during the exposure.
+
+        A trailed source is not a stretched point source: it is the PSF
+        *integrated along the track the object took while the shutter was
+        open*.  Rendering it as a sum of PSF stamps along that path is
+        therefore exact rather than an approximation, and it reproduces the
+        property detection relies on -- a trail has the PSF's profile across
+        its width and a flat top along its length, which no elongated galaxy
+        does.
+
+        ``trail_length`` is in pixels; below about half the seeing width the
+        object is indistinguishable from a point source and one stamp is
+        rendered instead of many.
+        """
+        length = float(max(trail_length, 0.0))
+        angle = math.radians(float(trail_angle))
+        if length < 0.5 * self.config.seeing_fwhm:
+            self.add_star(canvas, x, y, flux)
+            self._next_id -= 1
+            return TruthObject(self._new_id(), x, y, "mover", flux,
+                               morphology="unresolved",
+                               meta={"trail_length": length, "trail_angle": trail_angle,
+                                     "trailed": False})
+        # One sample per half pixel keeps the trail smooth; fewer leaves it
+        # visibly beaded, which would be an artefact of the simulator rather
+        # than of the sky.
+        n_samples = max(2, int(np.ceil(2.0 * length)))
+        for step in range(n_samples):
+            offset = (step / (n_samples - 1) - 0.5) * length
+            self.add_star(canvas, x + offset * np.cos(angle), y + offset * np.sin(angle),
+                          flux / n_samples)
+            self._next_id -= 1
+        return TruthObject(self._new_id(), x, y, "mover", flux, morphology="trailed",
+                           meta={"trail_length": length, "trail_angle": trail_angle,
+                                 "trailed": True})
 
     def add_galaxy(self, canvas: np.ndarray, x: float, y: float, flux: float,
                    morphology: Optional[str] = None) -> TruthObject:
@@ -302,8 +375,15 @@ class SkySimulator:
                            r_eff=radius, meta={"n_members": int(n_members)})
 
     def add_lens_system(self, canvas: np.ndarray, x: float, y: float,
-                        flux: float) -> TruthObject:
-        """Render an elliptical deflector surrounded by lensed arcs."""
+                        flux: float, arc_scale: float = 1.0) -> TruthObject:
+        """Render an elliptical deflector surrounded by lensed arcs.
+
+        ``arc_scale`` brightens or dims the arcs relative to the deflector
+        without touching either one's shape.  The deflector is an old red
+        elliptical and the arcs are a lensed star-forming galaxy behind it,
+        so in a multi-band field the two carry different colours -- which is
+        the single most useful discriminator a real lens search has.
+        """
         rng = self.rng
         theta_e = float(rng.uniform(7.0, 15.0))
         r_eff = theta_e * float(rng.uniform(0.45, 0.75))
@@ -331,7 +411,7 @@ class SkySimulator:
                 base_pa + 360.0 * k / n_arcs + float(rng.uniform(-18, 18)),
                 float(rng.uniform(0.5, 1.0)))
         if arcs.sum() > 0:
-            arcs *= 0.28 * flux / arcs.sum()
+            arcs *= 0.28 * flux * float(arc_scale) / arcs.sum()
 
         stamp = convolve(deflector + arcs, self._psf_kernel())
         canvas[region] += stamp
@@ -394,15 +474,15 @@ class SkySimulator:
         cfg = self.config
         ny, nx = cfg.shape
         yy, xx = np.mgrid[0:ny, 0:nx]
-        gx = float(self.rng.uniform(-1, 1)) * cfg.background_gradient
-        gy = float(self.rng.uniform(-1, 1)) * cfg.background_gradient
+        gx = float(self._noise_rng.uniform(-1, 1)) * cfg.background_gradient
+        gy = float(self._noise_rng.uniform(-1, 1)) * cfg.background_gradient
         plane = 1.0 + gx * (xx / max(nx - 1, 1) - 0.5) + gy * (yy / max(ny - 1, 1) - 0.5)
         return cfg.background * plane
 
     def _add_artifacts(self, image: np.ndarray) -> Dict[str, Any]:
         """Cosmic rays and bad columns -- the artefacts vetting must reject."""
         cfg = self.config
-        rng = self.rng
+        rng = self._noise_rng
         ny, nx = cfg.shape
         record: Dict[str, Any] = {"cosmic_rays": [], "bad_columns": []}
 
@@ -430,16 +510,32 @@ class SkySimulator:
         """Poisson photon noise plus Gaussian read noise, then saturation."""
         cfg = self.config
         electrons = np.clip(signal, 0, None) * cfg.gain
-        noisy = self.rng.poisson(np.clip(electrons, 0, 1e12)).astype(float) / cfg.gain
-        noisy += self.rng.normal(0.0, cfg.read_noise, size=signal.shape)
+        rng = self._noise_rng
+        noisy = rng.poisson(np.clip(electrons, 0, 1e12)).astype(float) / cfg.gain
+        noisy += rng.normal(0.0, cfg.read_noise, size=signal.shape)
         return np.clip(noisy, None, cfg.saturation)
 
     # -- top-level generation ---------------------------------------------
-    def generate(self, inject: Optional[Sequence[TruthObject]] = None
+    def generate(self, inject: Optional[Sequence[TruthObject]] = None,
+                 flux_scale: Optional[Mapping[int, float]] = None,
+                 arc_scale: Optional[Mapping[int, float]] = None
                  ) -> Tuple[AstroImage, List[TruthObject]]:
-        """Generate one field; returns the image and its truth table."""
+        """Generate one field; returns the image and its truth table.
+
+        ``flux_scale`` multiplies individual objects' fluxes, keyed by the
+        truth id they are about to be given.  Because object ids are handed
+        out in a fixed order, re-seeding the simulator and passing a scale
+        map re-renders *the same field* at different brightnesses -- which is
+        how :meth:`generate_multiband` produces several filters of one sky.
+        ``arc_scale`` does the same for a lens system's arcs alone, letting
+        them carry a colour of their own.
+        """
         cfg = self.config
         rng = self.rng
+
+        def scale_for(default: float = 1.0) -> float:
+            # `_next_id` is the id the *next* object created will receive.
+            return float(flux_scale.get(self._next_id, default)) if flux_scale else default
         ny, nx = cfg.shape
         margin = 6
         canvas = np.zeros(cfg.shape, dtype=float)
@@ -457,23 +553,29 @@ class SkySimulator:
 
         for _ in range(cfg.n_galaxies):
             x, y = position()
-            truth.append(self.add_galaxy(canvas, x, y, log_flux(cfg.galaxy_flux_range)))
+            truth.append(self.add_galaxy(canvas, x, y,
+                                         log_flux(cfg.galaxy_flux_range) * scale_for()))
         for _ in range(cfg.n_nebulae):
             x, y = position()
-            truth.append(self.add_nebula(canvas, x, y, log_flux((5e3, 8e4))))
+            truth.append(self.add_nebula(canvas, x, y, log_flux((5e3, 8e4)) * scale_for()))
         for _ in range(cfg.n_clusters):
             x, y = position()
-            truth.append(self.add_star_cluster(canvas, x, y, log_flux((2e4, 1.2e5))))
+            truth.append(self.add_star_cluster(canvas, x, y,
+                                               log_flux((2e4, 1.2e5)) * scale_for()))
         for _ in range(cfg.n_lenses):
             x, y = position()
-            truth.append(self.add_lens_system(canvas, x, y, log_flux((2e4, 9e4))))
+            arcs = float(arc_scale.get(self._next_id, 1.0)) if arc_scale else 1.0
+            truth.append(self.add_lens_system(canvas, x, y,
+                                              log_flux((2e4, 9e4)) * scale_for(),
+                                              arc_scale=arcs))
         for _ in range(cfg.n_anomalies):
             x, y = position()
-            truth.append(self.add_anomaly(canvas, x, y, log_flux((6e3, 5e4))))
+            truth.append(self.add_anomaly(canvas, x, y, log_flux((6e3, 5e4)) * scale_for()))
         for _ in range(cfg.n_stars):
             x, y = position()
             variable = bool(rng.random() < cfg.variable_fraction)
-            truth.append(self.add_star(canvas, x, y, log_flux(cfg.star_flux_range), variable))
+            truth.append(self.add_star(canvas, x, y,
+                                       log_flux(cfg.star_flux_range) * scale_for(), variable))
 
         for obj in inject or []:
             if obj.kind == "star":
@@ -502,14 +604,123 @@ class SkySimulator:
                  nx, ny, len(truth))
         return image, truth
 
+    def generate_multiband(self, bands: Sequence[str] = ("g", "r", "i"),
+                           seeing: Optional[Mapping[str, float]] = None,
+                           background: Optional[Mapping[str, float]] = None,
+                           zero_point: Optional[Mapping[str, float]] = None,
+                           redshift: float = 0.15,
+                           redshift_range: Optional[Tuple[float, float]] = None,
+                           ) -> Tuple[Dict[str, AstroImage], List[TruthObject]]:
+        """Render the same sky through several filters.
+
+        Every band shows the *same objects in the same places*; what changes
+        is each object's brightness, set by the colours in :mod:`sed`, and
+        the observing conditions -- seeing, sky level and zero point are all
+        band-dependent in reality and are here too.  Noise is drawn
+        independently per band, because two exposures of one field are two
+        separate realisations of the detector.
+
+        Returns a band-keyed dict of images and one truth table, where each
+        object carries ``meta["magnitudes"]`` (offsets from the ``r`` band)
+        and ``meta["band_flux"]``.
+
+        >>> sim = SkySimulator(SkyConfig(shape=(96, 96), n_stars=8, n_galaxies=2,
+        ...                              n_nebulae=0, n_clusters=0, n_lenses=0,
+        ...                              n_anomalies=0))
+        >>> images, truth = sim.generate_multiband(("g", "r"))
+        >>> sorted(images)
+        ['g', 'r']
+        """
+        bands = tuple(dict.fromkeys(bands))
+        if not bands:
+            raise ValueError("at least one band is required")
+        cfg = self.config
+        seed = int(cfg.seed)
+
+        # Pass one establishes the truth table.  Its image is discarded: the
+        # bands are all rendered below under identical conditions, so that no
+        # single filter is privileged by having been drawn first.
+        self.rng = np.random.default_rng(seed)
+        self._noise_rng = self.rng
+        self._next_id = 1
+        _, truth = self.generate()
+
+        colour_rng = np.random.default_rng(seed + 104729)
+        offsets: Dict[int, Dict[str, float]] = {}
+        arc_offsets: Dict[int, Dict[str, float]] = {}
+        for obj in truth:
+            if redshift_range is not None and obj.kind == "galaxy":
+                # Each galaxy gets its own redshift and its own drawn
+                # spectrum, integrated through the filters.  This is the path
+                # that makes a photometric-redshift test mean something.
+                obj_z = float(colour_rng.uniform(*redshift_range))
+                offsets[obj.id], sed_truth = sed_colours(
+                    obj.kind, bands, obj_z, colour_rng)
+                obj.meta.update(sed_truth)
+            else:
+                offsets[obj.id] = object_colours(
+                    obj.kind, obj.morphology, rng=colour_rng,
+                    redshift=redshift if obj.kind == "galaxy" else 0.0)
+            obj.meta["magnitudes"] = dict(offsets[obj.id])
+            if obj.kind == "lens":
+                # The deflector is the elliptical the object's colour
+                # describes; the arcs are a separate, bluer galaxy behind it.
+                arc_offsets[obj.id] = object_colours("lens_arc", rng=colour_rng)
+                obj.meta["arc_magnitudes"] = dict(arc_offsets[obj.id])
+
+        images: Dict[str, AstroImage] = {}
+        saved = (cfg.seeing_fwhm, cfg.background, cfg.zero_point, cfg.band)
+        try:
+            for index, band in enumerate(bands):
+                ratios = {oid: flux_ratios(value).get(band, 1.0)
+                          for oid, value in offsets.items()}
+                arcs = {oid: (flux_ratios(value).get(band, 1.0) /
+                              max(ratios.get(oid, 1.0), 1e-9))
+                        for oid, value in arc_offsets.items()}
+                cfg.seeing_fwhm = float((seeing or {}).get(band, saved[0]))
+                cfg.background = float((background or {}).get(band, saved[1]))
+                cfg.zero_point = float((zero_point or {}).get(band, saved[2]))
+                cfg.band = band
+
+                self.rng = np.random.default_rng(seed)
+                self._noise_rng = np.random.default_rng(seed + 7919 * (index + 1))
+                self._next_id = 1
+                image, band_truth = self.generate(flux_scale=ratios, arc_scale=arcs)
+                image.name = f"synthetic_{band}"
+                image.meta["band"] = band
+                images[band] = image
+                for obj, rendered in zip(truth, band_truth):
+                    obj.meta.setdefault("band_flux", {})[band] = float(rendered.flux)
+        finally:
+            cfg.seeing_fwhm, cfg.background, cfg.zero_point, cfg.band = saved
+            self._noise_rng = self.rng
+
+        log.info("generated %d-band field (%s) with %d truth objects",
+                 len(bands), ", ".join(bands), len(truth))
+        return images, truth
+
     def generate_series(self, n_epochs: int = 5, cadence: float = 2.0,
-                        n_transients: int = 2, transient_kind: str = "supernova"
+                        n_transients: int = 2, transient_kind: str = "supernova",
+                        n_movers: int = 0,
+                        mover_rate_range: Tuple[float, float] = (15.0, 90.0)
                         ) -> Tuple[ImageSeries, List[TruthObject], List[Dict[str, Any]]]:
         """Generate a multi-epoch series with injected transients.
 
         Returns ``(series, static_truth, transient_truth)``.  Every epoch
         shares the same static sky so difference imaging has a genuine
         template, while transients and variable stars change with time.
+
+        ``n_movers`` injects solar-system objects, whose truth records are
+        appended to the transient list with ``kind="mover"``.  Their rates
+        are drawn from ``mover_rate_range`` in **arcseconds per hour**, which
+        is the unit the sky works in: a main-belt asteroid near opposition
+        moves at roughly 30 arcsec/hour and a near-Earth object far faster.
+
+        The unit matters for the cadence too.  At 30 arcsec/hour an object
+        crosses a 2-arcminute field in four hours, so a series taken two days
+        apart never sees the same asteroid twice -- which is why asteroid
+        linking is done *within a night*.  Pass a cadence of a fraction of a
+        day when injecting movers.
         """
         cfg = self.config
         rng = self.rng
@@ -580,6 +791,35 @@ class SkySimulator:
                 "host_truth_id": host_id,
             })
 
+        # Movers: a start position, a constant sky velocity, and a trail set
+        # by how far the object travels while the shutter is open.
+        for k in range(max(0, int(n_movers))):
+            rate = float(rng.uniform(*mover_rate_range))          # arcsec / hour
+            heading = float(rng.uniform(0.0, 360.0))
+            # arcsec/hour -> pixels/day: divide by the pixel scale, then
+            # multiply by 24.  Dividing by 24 instead leaves an asteroid
+            # moving half a pixel across a whole series, which looks exactly
+            # like a stationary source and silently removes the thing being
+            # tested.
+            speed = rate / cfg.pixel_scale * 24.0                 # pixels / day
+            # Start on the side the object is coming *from*, so it spends the
+            # series crossing the field rather than leaving it at once.
+            span = speed * cadence * (n_epochs - 1)
+            start_x = float(np.clip(nx / 2 - 0.5 * span * np.cos(np.radians(heading)),
+                                    margin, nx - margin))
+            start_y = float(np.clip(ny / 2 - 0.5 * span * np.sin(np.radians(heading)),
+                                    margin, ny - margin))
+            transients.append({
+                "id": 20_000 + k, "x": start_x, "y": start_y, "kind": "mover",
+                "peak_flux": float(10 ** rng.uniform(3.6, 4.6)),
+                "rate_arcsec_per_hour": rate,
+                "heading_deg": heading,
+                "vx": speed * float(np.cos(np.radians(heading))),
+                "vy": speed * float(np.sin(np.radians(heading))),
+                "trail_length": rate * (300.0 / 3600.0) / cfg.pixel_scale,
+                "host_truth_id": None,
+            })
+
         images: List[AstroImage] = []
         for epoch in range(int(n_epochs)):
             epoch_sim = SkySimulator(SkyConfig(**{**cfg.__dict__, "seed": base_seed + 1000 + epoch}))
@@ -592,6 +832,19 @@ class SkySimulator:
                 epoch_sim._next_id -= 1
 
             for spec in transients:
+                if spec["kind"] == "mover":
+                    elapsed = epoch * cadence
+                    mx = spec["x"] + spec["vx"] * elapsed
+                    my = spec["y"] + spec["vy"] * elapsed
+                    inside = (0 <= mx < nx) and (0 <= my < ny)
+                    if inside:
+                        epoch_sim.add_mover(frame, mx, my, spec["peak_flux"],
+                                            spec["trail_length"], spec["heading_deg"])
+                        epoch_sim._next_id -= 1
+                    spec.setdefault("positions", []).append(
+                        {"epoch": epoch, "time": elapsed, "x": float(mx), "y": float(my),
+                         "inside": bool(inside)})
+                    continue
                 dt = epoch - spec["peak_epoch"]
                 # Fast exponential rise, slower exponential decline.
                 if dt < 0:

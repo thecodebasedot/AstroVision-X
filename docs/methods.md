@@ -55,6 +55,64 @@ Median error across 60 simulated fields: 6 %. Where fewer than five point
 sources survive the cut, the pipeline warns that the PSF is poorly constrained
 rather than silently proceeding.
 
+## A PSF that changes across the field
+
+One PSF for a whole frame is a convenient fiction. Optics degrade off-axis
+and a wide-field camera is easily twenty percent blurrier in the corners.
+Everything downstream inherits that error, and the aperture correction is the
+clearest case: derived from a field-average PSF it is wrong at the centre and
+wrong at the edges *in opposite directions*.
+
+Each pixel of the PSF stamp is a low-order polynomial in field coordinates,
+fitted across the frame's own stars. Every stamp pixel shares one design
+matrix, so the whole thing is a single least-squares solve.
+
+Four details decide whether it works, and each was forced by a measurement
+that failed first.
+
+**It validates itself.** A quadratic has six free parameters per stamp pixel
+and will always fit its training stars better than a constant. Whether it is
+*better* is answered by holding stars out — seven splits, and the varying
+model must win in the worst of them, not on average. A single hold-out is not
+enough: on a field whose PSF does not vary at all, one split claimed an 11.8%
+improvement and the model invented a hundred-percent variation across the
+frame.
+
+**Star selection has to be regional.** The existing selector keeps the
+sharpest sources, which is the right way to reject small galaxies when the
+PSF is constant and exactly the wrong way when it is not — a star in a blurry
+corner is broader than a galaxy at the sharp centre. Selecting within tiles
+keeps the galaxy rejection while sampling the whole field. The tiles have to
+be small enough that the PSF really is nearly constant inside one: on a field
+with a real 40% variation, three tiles a side found nothing and four found it
+cleanly.
+
+**The comparison must be weighted by the PSF profile.** A 21-pixel stamp of a
+3-pixel PSF is mostly empty sky, and an unweighted residual over all 441
+pixels is dominated by wing noise. Unweighted, the metric could not tell the
+varying model from the constant one on a field with a genuine 34% variation.
+For the same reason the stamp is sized to 2.5 times the measured seeing
+rather than left at a fixed 25 pixels — every extra ring of wing pixels adds
+noise without adding signal.
+
+**It never extrapolates.** Evaluation positions are clamped to the bounding
+box of the stars the fit actually saw. A quadratic run past its last star
+returned FWHMs twice the true value.
+
+### What was tried and not shipped
+
+Position-dependent PSF *matching* in difference imaging is the obvious next
+step, and it was built and measured: tiled matching with hard tile edges,
+then with smooth inverse-distance blending, then with the template's spatial
+PSF refitted rather than inherited from one epoch. Every variant made the
+spurious candidate count worse — from 18 to between 45 and 114 on the same
+field. It is not shipped, and no configuration switch offers it.
+
+The honest reading is that a matching kernel good enough to beat one global
+kernel has to be derived from the difference itself, in the manner of a
+proper image-subtraction basis, rather than assembled from per-tile PSF
+models. That is a larger piece of work.
+
 ## Detection
 
 Detection runs on a matched-filtered copy of the image: convolving with a
@@ -150,6 +208,213 @@ more diffuse, or brighter and granular — which keeps them independent of the
 zero point and the exposure depth. They remain the weakest part of the
 classifier, because they genuinely overlap galaxies in every measured statistic.
 
+## Colours, and the stellar locus
+
+Morphology answers "is this resolved?" and answers it well when the object is
+bright. It stops working exactly where survey catalogs get interesting — near
+the detection limit, where a small galaxy and a star are both a few pixels of
+noise-dominated light and every size statistic collapses onto the same value.
+
+Colour does not degrade the same way, because it is not a size measurement.
+Stars are approximately blackbodies behind the same filters, so their colours
+fall on a one-parameter curve, the **stellar locus**. Galaxies are integrated,
+redshifted stellar populations and sit off it.
+
+Three decisions carry that idea into something usable.
+
+**The locus is fitted from the field itself**, not taken from a table. That
+makes the test independent of the zero point, the filter's exact throughput,
+and any reddening common to the field — all of which move the locus bodily
+without changing the fact that stars lie on it. Morphological stellarity seeds
+the fit, and the seed is deliberately the *unfused* value: a locus seeded by
+its own output would confirm itself.
+
+**The widths are fitted from the field too**, and for a harder reason. The
+test compares how far a source sits off the locus against how far it could sit
+off it by chance, so it needs that second number. Formal photometric errors
+are not it — measured against truth they come out about 2.5 times too small,
+because they count photon and read noise but not sky estimation, blending, or
+the residual of matching one band's PSF to another. Both populations' widths
+are therefore measured directly, in signal-to-noise bins, from the field's own
+point-like and resolved sources.
+
+**The test is a likelihood ratio, not a sigmoid.** This is the decision the
+whole thing turns on. A sigmoid of the locus offset saturates near 1 for every
+small offset, so a test with no discriminating power votes "star" for
+everything — including the galaxies it exists to catch. Comparing two
+hypotheses instead makes an uninformative test return 0.5 on its own, which
+carries no weight when it is fused with morphology in log-odds. Both
+hypotheses are mixed with a broad outlier component, because the Rayleigh tail
+is far too thin for real data: a blended star lands five sigma out and would
+otherwise be convicted with certainty.
+
+Finally the fusion weight is not a constant. Each field measures how well its
+own colour test separates the morphological classes, and weights it
+accordingly — to zero when the answer is chance. A weak, noisy vote added at
+full strength to a strong one costs accuracy in every field where the colours
+happen to be poor, and no single constant can be right for both a shallow
+two-band field and a deep five-band one.
+
+## Forced photometry
+
+A colour is a *difference of magnitudes measured the same way*, and almost
+everything that goes wrong with colours goes wrong because that condition was
+quietly broken. Three ways, three fixes:
+
+- **Different apertures.** Detecting independently in each band gives each one
+  its own centroid and Kron radius, so the two apertures sample different parts
+  of the same galaxy. One aperture, defined once in the detection band, is
+  applied at the same *sky* position everywhere.
+- **Different seeing.** A fixed aperture catches more of a point source in good
+  seeing than in bad, so a star observed in 1.0" and 1.6" acquires a colour it
+  does not have. Every band is convolved to the worst PSF in the set — blurring
+  is stable, sharpening is not. Each band is then corrected by the enclosed
+  energy of its own *post-matching* PSF, because a Gaussian kernel applied to a
+  Moffat leaves something that is not quite either.
+- **Different pixel grids.** Apertures are specified in arcseconds and
+  converted per band.
+
+A colour is recorded only when both bands clear a signal-to-noise floor. A
+source detected at 40σ in the red and 1σ in the blue does not have a faint blue
+measurement; it has noise, and left in, such values dominate the scatter of any
+colour cut. What it does have is a one-sided limit — it is at least that red —
+and that is what gets stored.
+
+## Calibration
+
+The WCS that comes with a file is a starting guess. Pointing models are
+imperfect, focal planes flex, and a telescope reporting its position to an
+arcsecond is doing well. The plate solution matches detections to reference
+stars under the current guess, fits, then re-matches with a radius drawn from
+that fit's own residual and refits. Matching is *mutual*-nearest: one-sided
+matching quietly assigns several detections to one bright reference star in a
+crowded field, and those duplicated pairs pull the fit toward that one star.
+
+Distortion is handled by SIP coefficients applied, per the convention, to the
+offset from the reference pixel and *before* the linear matrix. Getting that
+order wrong is the classic SIP bug: applied to absolute pixel coordinates it
+leaves an error that grows across the detector and looks exactly like a bad
+plate scale. The inverse is found by fixed-point iteration rather than by
+requiring reverse coefficients, which many real headers do not carry.
+
+A zero point is fitted as `m_catalog = m_instrumental + zp + k·colour`. The
+colour term is not optional refinement: a filter is never exactly the reference
+survey's filter, so the offset between systems depends on the shape of the
+source's spectrum. Fitting only a constant leaves that dependence in the
+residuals, where it becomes a systematic, colour-dependent error in every
+magnitude. It is fitted only when the standards span enough colour to
+constrain it — a slope fitted to points all at the same colour returns a large
+coefficient with a small formal error, which is the worst possible pairing.
+
+## Photometric redshifts
+
+A distance from four numbers. It works because a galaxy spectrum is not
+featureless: an old stellar population drops sharply shortward of 4000
+angstroms, a young one carries strong emission lines, and as the galaxy
+recedes those features slide through the filters. The pattern of broad-band
+fluxes therefore depends on redshift, and fitting a library of redshifted
+spectra recovers it.
+
+The integral that turns a spectrum into a magnitude is weighted by `1/λ`,
+the photon-counting convention, because a CCD counts photons rather than
+energy. The energy-weighted version shifts every magnitude by a few
+hundredths — and shifts them by *different* amounts in different filters,
+which is a colour error and therefore a redshift error.
+
+Three things the arithmetic makes it easy to hide, and this implementation
+does not.
+
+**The posterior is often bimodal.** A red galaxy at low redshift and a blue
+one higher up can produce the same colours, because a 4000 Å break sitting
+between two filters looks much like a red continuum. Reporting only the peak
+converts a known ambiguity into a confident wrong answer. Both peaks are
+reported; a source whose second peak carries a quarter of the weight is
+flagged ambiguous and is not called reliable.
+
+**The posterior width is not the error.** It is the error *given the
+template library*, and no six templates describe every galaxy. Measured
+against simulated truth the width came out about three times too small, so a
+floor is added in quadrature rather than the model being quoted as if it
+were right.
+
+**The estimate is the posterior mean, not the χ² minimum.** With a bimodal
+posterior the minimum sits in whichever peak happens to be a hair deeper and
+flips between them on noise.
+
+The library also reports the redshifts at which the break actually lies
+inside one of the filters. Outside that range the colours change slowly with
+redshift and dust can imitate the continuum slope; that is where the errors
+live, and it is a property of the filter set rather than of any algorithm.
+
+### The filter count is the whole story
+
+With `g, r, i` there are two colours and at least three unknowns — redshift,
+spectral type, dust. The problem is underdetermined, and no care in the fit
+changes that. What care does is make the failure visible: measured on 400
+galaxies drawn from spectra the library does not contain, three filters give
+a 22% catastrophic-outlier rate and five give 2.8%.
+
+The templates the simulator draws from have *continuous* age, dust and
+emission parameters while the fit library has six discrete entries, so no
+simulated galaxy is ever exactly reproducible by the fit. That is the
+situation with real galaxies, and it is the only way the measured scatter
+means anything rather than measuring a lookup.
+
+### What it replaces
+
+Every distance-dependent quantity — physical size, absolute magnitude,
+luminosity — previously inherited one assumed redshift for a whole field.
+Each galaxy now carries its own, with its own error, and the report's
+assumptions section says how many were measured rather than assumed. A
+galaxy whose photo-z is unreliable still gets one, and everything derived
+from it carries the flag that says so.
+
+## Knowing what is already known
+
+Everything this package calls a *candidate* rests on one unstated claim: that
+the object is not already known. Without checking, an anomaly ranking is a
+list of the field's oddest objects, which is a different thing and is mostly
+catalogued variable stars, asteroids on their published ephemerides, and
+galaxies someone measured in 1991.
+
+One cone covering the whole image is fetched once and matched locally — the
+other way round is one HTTP request per source, which is slow for the caller
+and rude to a service that is free to use. The backend is pluggable and the
+default does nothing, so a pipeline never silently stalls on an unreachable
+service; a local reference file works with no network at all.
+
+The report distinguishes three states a naive implementation conflates:
+*checked and matched*, *checked and not matched*, and *not checked* — where
+the last includes a cone that came back empty, which establishes nothing.
+Matched sources keep every measurement and lose their claim to novelty: an
+anomaly is demoted by a factor of four, a transient barely at all, because a
+supernova going off in a known galaxy is the normal case rather than a reason
+for suspicion.
+
+## Uncertainty
+
+A Sérsic index of 3.8 means something entirely different at ±0.2 than at ±2.1,
+and at moderate signal-to-noise the second is the common case.
+
+Fitted parameters get their errors from the curvature of the fit's own
+chi-squared surface, scaled by the achieved chi-squared — the formal errors
+assume the model is correct and the noise estimate exact, and a real galaxy is
+not a Sérsic profile. What matters more than the marginal errors is the
+*correlation*: these fits are effectively degenerate in `n` against `r_eff`,
+so a source whose worst pair correlates above 0.95 carries a flag saying so.
+
+The non-parametric statistics have no Jacobian, so their errors come from
+re-measuring the object on repeated noise realisations at the image's own
+measured noise. This also exposes bias, not just scatter: asymmetry is built
+from absolute differences, so noise pushes it upward whichever way the noise
+goes, by about 0.13 in a typical faint source.
+
+Classifier confidences are numbers between 0 and 1, which does not make them
+probabilities. Isotonic regression or Platt scaling — chosen by how much
+labelled data there is, since isotonic overfits below a few hundred points —
+maps them to values that mean what they say. Platt scaling belongs on the
+log-odds scale; applied to probabilities directly it makes calibration worse.
+
 ## Difference imaging
 
 Subtraction removes every constant source and leaves what changed. Getting it
@@ -176,6 +441,83 @@ bias reached 10 %, and a 10 % scale error leaves a 10 % residual at every star:
 
 **Templates hold out the epoch being searched.** Including it would put a
 fraction of any transient into the very template used to subtract it.
+
+## Moving objects
+
+A difference image finds an asteroid as readily as a supernova. What tells
+them apart is that one of them is in a different place every time — and that
+difference is destructive, not helpful, to a transient pipeline: the
+position-based merging that consolidates a real transient into one candidate
+*scatters* a mover into N separate single-epoch detections, each looking like
+a marginal unconfirmed transient. One asteroid crossing five epochs becomes
+five entries in a follow-up queue, none of them real.
+
+Linking puts it back together. Every pair of detections from two epochs
+implies a velocity; those within the searched rate range are extrapolated to
+the other epochs, and whatever lands on the prediction joins the track.
+
+Three decisions do the real work.
+
+**Rates are in arcseconds per hour, not pixels per epoch.** A rate in pixels
+says as much about the camera as about the object, and the cut that keeps the
+search tractable is a physical one: a main-belt asteroid near opposition moves
+at roughly 30 arcsec/hour. It also sets the cadence — at that rate an object
+crosses a two-arcminute field in four hours, so a series taken two nights
+apart never sees the same asteroid twice. Asteroid linking is a within-night
+operation, and the simulator's units had to be right before any of this could
+be tested. They were not, at first: a factor-of-24 slip left injected
+asteroids crossing half a pixel per night, indistinguishable from stationary
+sources.
+
+**The residual is reduced by the degrees of freedom.** A tracklet fits four
+parameters, so three detections leave two degrees of freedom and five leave
+six — and a three-point track therefore has a *smaller* raw residual than a
+five-point one for identical astrometric errors. Comparing raw residuals
+rewards the shorter, weaker link. Dividing by `sqrt(1 - 2/n)` widened the
+measured gap between real and chance tracklets from a factor of five to a
+factor of seven and removed the only spurious tracklet in the validation set,
+without tuning a threshold.
+
+**The chance rate is estimated, not assumed.** Unrelated detections do line
+up. The expected number of coincidental tracklets follows from the field's own
+detection density, the matching tolerance and the number of epochs, and it is
+reported per run and per tracklet. Twenty detections an epoch over three
+epochs with a three-pixel tolerance yields about 2.7 expected false tracklets
+— which is not a defect in the estimate but a fair description of what three
+epochs buy.
+
+### Trails
+
+An object that moves while the shutter is open leaves the PSF smeared along
+its track. That is a second handle, and its value lies in being *independent*:
+linking works across exposures, a trail works within one. When both agree on
+a direction, coincidence becomes a much worse explanation.
+
+Measuring it correctly took two corrections. Comparing a source's
+second-moment size against the fitted PSF FWHM is comparing two different
+quantities — a Moffat's second moment far exceeds its FWHM, because the wings
+carry weight a FWHM ignores — and the subtraction reported a multi-pixel trail
+on a perfectly round star. The measurement is now the source's own major axis
+against its minor, which cancels the profile shape and the seeing together.
+And moments must be taken in a bounded window: unbounded, on a faint source,
+clipping the negative half of the noise leaves a positive floor across every
+pixel whose second moment is the *stamp's* size, and a round point source was
+credited with a 41-pixel trail.
+
+A trail is finally required to be an elongation, not merely an excess. A
+noise-dominated source has two large but nearly equal axes whose quadrature
+difference is still several pixels while the source is round to two percent.
+
+### What a tracklet is not
+
+A tracklet is not an object and certainly not a discovery. It is a set of
+detections consistent with linear motion over a short arc. Turning that into
+an object needs an orbit; turning it into a *new* object needs the Minor
+Planet Center. The stage says so in its log line and the report repeats it.
+
+Movers are demoted inside the transient list rather than deleted from it. The
+tracklet is an interpretation of those detections, and an astronomer who
+disagrees needs to see what was interpreted.
 
 ## Real/bogus vetting
 

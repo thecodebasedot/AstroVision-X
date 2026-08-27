@@ -100,6 +100,84 @@ transients = TransientDetector().run(series, catalog)
 curves = LightCurveAnalyzer().run(series, catalog)
 ```
 
+## Several filters
+
+```python
+from astrovision.photometry import forced_photometry, measure_colours
+from astrovision.classify import fit_stellar_locus, annotate_catalog
+
+# `bands` maps filter name to a preprocessed AstroImage of the same sky.
+report = forced_photometry(bands, catalog, detection_band="r",
+                           aperture_arcsec=1.6, segmentation=segmentation)
+measure_colours(catalog, [("g", "r"), ("r", "i")], min_snr=5.0)
+
+source = catalog[0]
+source.colour("g", "r")            # magnitudes, NaN if either band is missing
+source.bands["g"].magnitude        # the per-band measurement
+source.meta["colours"]["g-r"]      # only present when both bands cleared min_snr
+source.meta["colour_limits"]       # one-sided limits where one band did not
+
+locus = annotate_catalog(catalog)  # fits and applies the stellar locus
+locus.separation                   # ROC area of the colour test on this field
+locus.information_weight           # 0 when colour carries no information here
+```
+
+The pipeline does all of this when extra bands are passed to `run`:
+
+```python
+analysis = Pipeline(config).run(bands["r"], bands=bands, preprocess=False)
+```
+
+## Reference catalogs and calibration
+
+```python
+from astrovision.io.external import build_service, crossmatch_catalog
+from astrovision.calibration import solve_plate, solve_zero_point
+from astrovision.calibration.astrometry import apply_solution
+from astrovision.calibration.photometry import apply_zero_point
+
+service = build_service("vizier", cache_dir=".cache")   # or "local", path=...
+report = crossmatch_catalog(catalog, service, radius_arcsec=2.0)
+report.conclusive                  # False when nothing was actually checked
+
+for source in catalog:
+    if "known" in source.flags:
+        print(source.meta["known_object"]["described_type"])
+
+reference = service.query(ra, dec, radius_arcsec)
+solution = solve_plate(catalog, reference, image.wcs, radius_arcsec=5.0)
+if solution.succeeded:
+    image.wcs = solution.wcs
+    apply_solution(catalog, solution)
+    print(f"{solution.rms_arcsec:.3f} arcsec from {solution.n_matched} stars")
+
+zero_point = solve_zero_point(catalog, reference, band="r",
+                              colour_pair=("g", "r"))
+apply_zero_point(catalog, zero_point, "r")
+```
+
+## Uncertainty
+
+```python
+from astrovision.morphology import bootstrap_morphology
+from astrovision.ml import fit_calibrator, calibration_report
+
+errors = bootstrap_morphology(cutout, noise, centre=(x, y), n_samples=24)
+errors.error("gini")                    # standard deviation over realisations
+errors.bias("asymmetry", measured)      # how far noise pushes it
+
+fit = source.meta["sersic"]
+fit["errors"]["n"]                      # one-sigma marginal error
+fit["worst_correlation"]                # usually n against r_eff, near 1
+
+calibrator = fit_calibrator(scores, labels)     # isotonic or Platt, by data size
+calibration_report(calibrator.transform(scores), labels)["usable_as_probability"]
+```
+
+Enable the bootstrap in the pipeline with `config.morphology.uncertainty = True`;
+it is off by default because it costs `bootstrap_samples` times the shape
+measurement.
+
 ## Reports
 
 ```python

@@ -1,6 +1,15 @@
 """Machine-learning components: features, embeddings, models and clustering."""
 
 from .autoencoder import DeepAutoencoder, LinearAutoencoder, build_autoencoder
+from .calibration import (
+    Calibrator,
+    brier_score,
+    calibration_report,
+    calibrate_catalog,
+    expected_calibration_error,
+    fit_calibrator,
+    reliability_curve,
+)
 from .clustering import DBSCAN, HDBSCANLite, KMeans, cluster, silhouette_score
 from .cnn import STAMP_CLASSES, StampClassifier, build_cnn, build_vit
 from .features import (
@@ -18,6 +27,8 @@ from .metric import SimilaritySearch, find_similar
 from .scaler import PCA, RobustScaler
 
 __all__ = [
+    "Calibrator", "fit_calibrator", "calibrate_catalog", "reliability_curve",
+    "expected_calibration_error", "brier_score", "calibration_report",
     "RobustScaler", "PCA",
     "IsolationForest", "LinearAutoencoder", "DeepAutoencoder", "build_autoencoder",
     "KMeans", "DBSCAN", "HDBSCANLite", "cluster", "silhouette_score",

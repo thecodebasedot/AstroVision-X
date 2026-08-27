@@ -103,6 +103,12 @@ def annotate_physical(catalog: SourceCatalog, redshift: Optional[float] = None,
     distance_cache: Dict[float, Dict[str, float]] = {}
     n_physical = 0
 
+    n_measured = sum(1 for source in catalog
+                     if (source.meta.get("photoz") or {}).get("z") is not None)
+    if n_measured:
+        assumptions.append(
+            f"photometric redshifts for {n_measured} galaxies, each with its own "
+            "distance; the rest fall back to the field assumption below")
     if redshift is not None:
         assumptions.append(f"a single redshift z = {redshift:g} for the whole field")
     elif assume_redshift_for_galaxies:
@@ -115,10 +121,31 @@ def annotate_physical(catalog: SourceCatalog, redshift: Optional[float] = None,
         angular = source.morphology.semi_major * 2.0 * pixel_scale
         physical["angular_diameter_arcsec"] = float(angular)
 
-        z = redshift
+        # A measured photometric redshift beats any field-wide assumption --
+        # and a field-wide assumption is what every distance-dependent
+        # quantity silently inherited before there was one to measure.
+        photoz = source.meta.get("photoz") or {}
+        z = None
+        if photoz.get("reliable") and np.isfinite(photoz.get("z", float("nan"))):
+            z = float(photoz["z"])
+            physical["redshift_source"] = "photometric"
+            physical["redshift_error"] = float(photoz.get("z_error", float("nan")))
+        elif photoz.get("z") is not None and np.isfinite(photoz.get("z", float("nan"))):
+            # An unreliable photo-z is still the best number available, but
+            # everything derived from it carries the flag that says so.
+            z = float(photoz["z"])
+            physical["redshift_source"] = "photometric_unreliable"
+            physical["redshift_error"] = float(photoz.get("z_error", float("nan")))
+            source.add_flag("uncertain_redshift")
+        if z is None:
+            z = redshift
+            if z is not None:
+                physical["redshift_source"] = "assumed_field"
         if z is None and assume_redshift_for_galaxies and source.is_extended:
             z = float(source.meta.get("redshift_hint", 0.1))
             physical["redshift_assumed"] = True
+            physical["redshift_source"] = "assumed_nominal"
+        physical["redshift"] = float(z) if z is not None else float("nan")
         if z is None or not np.isfinite(z) or z <= 0:
             source.meta["physical"] = physical
             continue

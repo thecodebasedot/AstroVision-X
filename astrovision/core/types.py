@@ -125,6 +125,7 @@ class Photometry:
     kron_radius: float = float("nan")
     petrosian_radius: float = float("nan")
     surface_brightness: float = float("nan")
+    zero_point: float = float("nan")
     saturated: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
@@ -175,6 +176,7 @@ class Source:
     class_confidence: float = 0.0
     class_scores: Dict[str, float] = field(default_factory=dict)
     photometry: Photometry = field(default_factory=Photometry)
+    bands: Dict[str, Photometry] = field(default_factory=dict)
     morphology: MorphologyMetrics = field(default_factory=MorphologyMetrics)
     anomaly_score: float = 0.0
     lens_score: float = 0.0
@@ -208,6 +210,24 @@ class Source:
         rows, cols = self.bbox.slices(image.shape[:2], pad=pad)
         return image[rows, cols]
 
+    def colour(self, blue: str, red: str) -> float:
+        """Colour index ``blue - red`` in magnitudes, or NaN if unmeasured.
+
+        The sign convention is the astronomical one: a *larger* value is a
+        redder object, because magnitudes run backwards.
+        """
+        first, second = self.bands.get(blue), self.bands.get(red)
+        if first is None or second is None:
+            return float("nan")
+        return float(first.magnitude - second.magnitude)
+
+    def colour_error(self, blue: str, red: str) -> float:
+        """Uncertainty on :meth:`colour`, adding the two bands in quadrature."""
+        first, second = self.bands.get(blue), self.bands.get(red)
+        if first is None or second is None:
+            return float("nan")
+        return float(math.hypot(first.magnitude_err, second.magnitude_err))
+
     def to_dict(self, include_embedding: bool = False) -> Dict[str, Any]:
         data: Dict[str, Any] = {
             "id": self.id,
@@ -228,6 +248,8 @@ class Source:
             "flags": list(self.flags),
             "meta": dict(self.meta),
         }
+        if self.bands:
+            data["bands"] = {name: phot.to_dict() for name, phot in self.bands.items()}
         if include_embedding and self.embedding is not None:
             data["embedding"] = np.asarray(self.embedding, dtype=float).tolist()
         return data
@@ -489,6 +511,10 @@ class FieldAnalysis:
     transients: List[TransientCandidate] = field(default_factory=list)
     anomalies: List[AnomalyRecord] = field(default_factory=list)
     lenses: List[LensCandidate] = field(default_factory=list)
+    #: Solar-system tracklets, as plain dict-able objects from
+    #: :mod:`astrovision.moving`.  Typed loosely to keep `core.types` free of
+    #: a dependency on a stage package.
+    tracklets: List[Any] = field(default_factory=list)
     light_curves: Dict[int, LightCurve] = field(default_factory=dict)
     statistics: Dict[str, Any] = field(default_factory=dict)
     provenance: Dict[str, Any] = field(default_factory=dict)
@@ -506,6 +532,7 @@ class FieldAnalysis:
             "n_transients": len(self.transients),
             "n_anomalies": len(self.anomalies),
             "n_lens_candidates": len(self.lenses),
+            "n_tracklets": len(self.tracklets),
             "n_light_curves": len(self.light_curves),
         }
 
@@ -515,6 +542,7 @@ class FieldAnalysis:
             "catalog": self.catalog.to_dict(include_embedding),
             "transients": [t.to_dict() for t in self.transients],
             "anomalies": [a.to_dict() for a in self.anomalies],
+            "tracklets": [t.to_dict() for t in self.tracklets],
             "lens_candidates": [l.to_dict() for l in self.lenses],
             "statistics": self.statistics,
             "provenance": self.provenance,

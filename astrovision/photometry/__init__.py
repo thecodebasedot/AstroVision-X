@@ -32,10 +32,19 @@ from .magnitudes import (
     surface_brightness,
     zero_point_from_standards,
 )
+from .multiband import (
+    MultiBandReport,
+    band_flux_table,
+    forced_photometry,
+    homogenise,
+    measure_colours,
+)
 from .photometer import Photometer
 
 __all__ = [
     "Photometer",
+    "forced_photometry", "homogenise", "measure_colours",
+    "band_flux_table", "MultiBandReport",
     "aperture_photometry", "elliptical_photometry", "multi_aperture",
     "circular_aperture_weights", "elliptical_aperture_weights",
     "annulus_background", "ApertureResult",
