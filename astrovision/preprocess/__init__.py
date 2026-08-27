@@ -33,6 +33,13 @@ from .normalize import (
     zscore,
 )
 from .pipeline import Preprocessor
+from .varying_psf import (
+    VaryingPSF,
+    find_psf_stars_by_region,
+    fit_varying_psf,
+    psf_at,
+    region_grid,
+)
 from .psf import (
     PSFModel,
     build_psf,
@@ -43,6 +50,8 @@ from .psf import (
 )
 
 __all__ = [
+    "VaryingPSF", "fit_varying_psf", "psf_at",
+    "find_psf_stars_by_region", "region_grid",
     "Preprocessor",
     "estimate_background", "subtract_background", "background_mesh",
     "global_background", "mode_estimate",

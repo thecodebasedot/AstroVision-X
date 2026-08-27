@@ -19,6 +19,11 @@ from .calibrate import (
     smooth_image,
 )
 from .psf import PSFModel, build_psf
+from .varying_psf import (
+    VaryingPSF,
+    find_psf_stars_by_region,
+    fit_varying_psf,
+)
 
 log = get_logger("preprocess.pipeline")
 
@@ -40,6 +45,7 @@ class Preprocessor:
     def __init__(self, config: Optional[PreprocessConfig] = None):
         self.config = config or PreprocessConfig()
         self.psf: Optional[PSFModel] = None
+        self.varying_psf: Optional[VaryingPSF] = None
         self.report: Dict[str, Any] = {}
 
     def run(self, image: AstroImage, bias: Optional[np.ndarray] = None,
@@ -125,6 +131,33 @@ class Preprocessor:
             report["psf"] = self.psf.to_dict()
             result.meta["psf"] = self.psf.to_dict()
             result.meta["psf_model"] = self.psf
+            if cfg.varying_psf:
+                # The single model above is kept regardless: it is the field
+                # average, every existing consumer expects it, and the
+                # spatial fit may decide the field does not vary at all.
+                # The per-tile cap is generous on purpose: the selector's own
+                # isolation and stellar-locus cuts are what limit the count,
+                # and a tight cap here silently starves the spatial fit -- a
+                # field with a real 40% variation fell back to one PSF simply
+                # because each tile was allowed only 26 stars.
+                stars = find_psf_stars_by_region(
+                    data, cfg.varying_psf_regions, rms, per_region=80)
+                # The stamp is sized to the *measured* seeing rather than
+                # left at a fixed 25 pixels.  A 25-pixel stamp around a
+                # 3-pixel PSF is mostly empty sky, and the held-out
+                # comparison that decides whether the field varies is then
+                # diluted by wing noise: on a field with a real 40%
+                # variation the fixed size scored 2.9% against a 3%
+                # threshold and the variation was thrown away.  2.5 FWHM,
+                # not more: the fit needs the core, where the PSF genuinely
+                # differs across the field, and every extra ring of wing
+                # pixels adds noise without adding signal.
+                stamp = int(2 * np.ceil(2.5 * max(self.psf.fwhm, 1.5)) + 1)
+                self.varying_psf = fit_varying_psf(
+                    data, stars, size=min(max(stamp, 11), 41), rms=rms,
+                    degree=cfg.varying_psf_degree)
+                result.meta["varying_psf"] = self.varying_psf
+                report["varying_psf"] = self.varying_psf.to_dict()
 
         result.meta["background_model"] = background
         result.meta["preprocess"] = report

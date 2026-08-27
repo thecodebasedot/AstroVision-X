@@ -10,6 +10,7 @@ from ..core.config import PhotometryConfig
 from ..core.logging import get_logger
 from ..core.types import SourceCatalog
 from ..io.image import AstroImage
+from ..preprocess.varying_psf import psf_at
 from .aperture import circular_aperture_weights, elliptical_photometry, multi_aperture
 from .growth import auto_aperture, concentration_index, curve_of_growth, flux_radius
 from .magnitudes import flux_to_magnitude, limiting_magnitude, surface_brightness
@@ -141,8 +142,13 @@ class Photometer:
 
             correction = 1.0
             if apply_correction and np.isfinite(source.photometry.aperture_radius):
+                # The *local* PSF where the field has a spatial model: an
+                # aperture correction derived from a field-average PSF is
+                # wrong by the amount the PSF varies, and it is wrong in
+                # opposite directions at the centre and the corners.
+                local = psf_at(image.meta, source.x, source.y) or psf_model
                 correction = self.aperture_correction(
-                    psf_model, source.photometry.aperture_radius)
+                    local, source.photometry.aperture_radius)
                 source.meta["aperture_correction"] = correction
 
             source.photometry.flux = float(measurement.flux * correction)

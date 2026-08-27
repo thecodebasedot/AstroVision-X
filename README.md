@@ -217,6 +217,7 @@ bad columns. They are *not* claims about real survey data.
 | Astrometric precision | 0.15 px median |
 | Photometric accuracy (isolated stars) | within 3 %, 3 % scatter |
 | PSF FWHM recovery | 6 % median error |
+| Centre-to-corner photometry gap | 2.2 % → 0.1 % with a position-dependent PSF |
 | Sérsic index recovery | 11 % median error |
 | Star/galaxy separation | 90 % (100 % for galaxies at S/N > 10) |
 | Multi-band colour accuracy | −0.009 mag bias, 0.060 mag scatter at S/N > 15 |

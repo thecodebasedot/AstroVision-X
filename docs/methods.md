@@ -55,6 +55,64 @@ Median error across 60 simulated fields: 6 %. Where fewer than five point
 sources survive the cut, the pipeline warns that the PSF is poorly constrained
 rather than silently proceeding.
 
+## A PSF that changes across the field
+
+One PSF for a whole frame is a convenient fiction. Optics degrade off-axis
+and a wide-field camera is easily twenty percent blurrier in the corners.
+Everything downstream inherits that error, and the aperture correction is the
+clearest case: derived from a field-average PSF it is wrong at the centre and
+wrong at the edges *in opposite directions*.
+
+Each pixel of the PSF stamp is a low-order polynomial in field coordinates,
+fitted across the frame's own stars. Every stamp pixel shares one design
+matrix, so the whole thing is a single least-squares solve.
+
+Four details decide whether it works, and each was forced by a measurement
+that failed first.
+
+**It validates itself.** A quadratic has six free parameters per stamp pixel
+and will always fit its training stars better than a constant. Whether it is
+*better* is answered by holding stars out — seven splits, and the varying
+model must win in the worst of them, not on average. A single hold-out is not
+enough: on a field whose PSF does not vary at all, one split claimed an 11.8%
+improvement and the model invented a hundred-percent variation across the
+frame.
+
+**Star selection has to be regional.** The existing selector keeps the
+sharpest sources, which is the right way to reject small galaxies when the
+PSF is constant and exactly the wrong way when it is not — a star in a blurry
+corner is broader than a galaxy at the sharp centre. Selecting within tiles
+keeps the galaxy rejection while sampling the whole field. The tiles have to
+be small enough that the PSF really is nearly constant inside one: on a field
+with a real 40% variation, three tiles a side found nothing and four found it
+cleanly.
+
+**The comparison must be weighted by the PSF profile.** A 21-pixel stamp of a
+3-pixel PSF is mostly empty sky, and an unweighted residual over all 441
+pixels is dominated by wing noise. Unweighted, the metric could not tell the
+varying model from the constant one on a field with a genuine 34% variation.
+For the same reason the stamp is sized to 2.5 times the measured seeing
+rather than left at a fixed 25 pixels — every extra ring of wing pixels adds
+noise without adding signal.
+
+**It never extrapolates.** Evaluation positions are clamped to the bounding
+box of the stars the fit actually saw. A quadratic run past its last star
+returned FWHMs twice the true value.
+
+### What was tried and not shipped
+
+Position-dependent PSF *matching* in difference imaging is the obvious next
+step, and it was built and measured: tiled matching with hard tile edges,
+then with smooth inverse-distance blending, then with the template's spatial
+PSF refitted rather than inherited from one epoch. Every variant made the
+spurious candidate count worse — from 18 to between 45 and 114 on the same
+field. It is not shipped, and no configuration switch offers it.
+
+The honest reading is that a matching kernel good enough to beat one global
+kernel has to be derived from the difference itself, in the manner of a
+proper image-subtraction basis, rather than assembled from per-tile PSF
+models. That is a larger piece of work.
+
 ## Detection
 
 Detection runs on a matched-filtered copy of the image: convolving with a

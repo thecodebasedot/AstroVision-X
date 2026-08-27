@@ -93,6 +93,43 @@ a Moffat profile sits slightly above its true FWHM.
 Tests: `TestPreprocess::test_psf_fwhm_matches_the_seeing`,
 `test_psf_rejects_galaxies`.
 
+## Spatially varying PSF
+
+**Setup.** 800 × 800 fields, 220 stars, seeing 3.0 px on the optical axis
+growing quadratically with field radius. Star selection over 4 × 4 tiles, a
+21-pixel stamp, quadratic in position.
+
+**Result.**
+
+| Injected variation | Stars used | Detected | Fitted / true corner-to-centre ratio |
+| --- | --- | --- | --- |
+| 0 % | 87 | no (correctly) | — |
+| 20 % | 119 | no | — |
+| 20 % | 231 | no | — |
+| 40 % | 120 | yes | 1.310 / 1.360 |
+| 40 % | 227 | yes | 1.379 / 1.371 |
+
+The method detects and recovers variation of roughly 35% and above given
+about 120 well-separated stars. At 20% it does not, even with 231 stars —
+and it says so and falls back to one PSF rather than fitting noise. That
+boundary is a property of the per-star photon noise in these simulations, not
+a threshold anyone chose.
+
+**The payoff.** Aperture corrections derived from the local PSF close the
+centre-to-corner photometric gap:
+
+| PSF model | Centre flux ratio | Corner flux ratio | Gap |
+| --- | --- | --- | --- |
+| One for the field | 1.0146 | 0.9929 | **2.2 %** |
+| Position-dependent | 0.9959 | 0.9949 | **0.1 %** |
+
+**Negative result.** Regional PSF matching in difference imaging was
+implemented in three variants and made things worse every time — spurious
+candidates rose from 18 to 45–114 on the same field. It was removed rather
+than left behind a switch. See `docs/methods.md`.
+
+Tests: `tests/test_varying_psf.py`.
+
 ## Photometry
 
 **Aperture geometry.** Fractional-coverage areas match `πr²` to better than

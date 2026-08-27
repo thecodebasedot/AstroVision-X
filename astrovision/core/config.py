@@ -124,6 +124,18 @@ class PreprocessConfig(_Section):
     mask_saturated: bool = True
     saturation_level: float = float("inf")
     smooth_sigma: float = 0.0
+    #: Fit a position-dependent PSF as well as the single field-average one.
+    #: The fit validates itself against held-out stars and falls back to one
+    #: model when the field does not actually vary, so leaving this on costs
+    #: only the fit; it is off by default because that fit is not free.
+    varying_psf: bool = False
+    varying_psf_degree: int = 2
+    #: Tiles for the star selection.  4 rather than 3 by default: the
+    #: selector keeps the sharpest sources in each tile, so a tile has to be
+    #: small enough that the PSF is nearly constant inside it or the bias
+    #: erases the very variation being measured.  On a field with a real 40%
+    #: variation, 3 tiles a side found no variation and 4 found it cleanly.
+    varying_psf_regions: int = 4
 
 
 @dataclass

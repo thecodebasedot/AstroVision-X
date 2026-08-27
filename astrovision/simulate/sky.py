@@ -77,6 +77,11 @@ class SkyConfig:
     psf: str = "moffat"                    # moffat | gaussian
     background: float = 120.0              # counts / pixel
     background_gradient: float = 0.06      # fractional across the field
+    #: Fractional growth of the seeing width from the optical axis to the
+    #: field corner.  0.2 means the corners are 20% blurrier than the centre,
+    #: which is a mild but entirely typical amount for a wide-field camera.
+    seeing_variation: float = 0.0
+    optical_axis: Optional[Tuple[float, float]] = None   # defaults to the centre
     read_noise: float = 5.0
     gain: float = 2.0                      # e-/count, sets Poisson scaling
     saturation: float = 60_000.0
@@ -124,13 +129,35 @@ class SkySimulator:
         self._next_id += 1
         return value
 
-    def _psf_stamp(self, shape, centre, amplitude: float) -> np.ndarray:
-        cfg = self.config
-        if cfg.psf == "gaussian":
-            return gaussian_psf(shape, centre, cfg.seeing_fwhm, amplitude)
-        return moffat_psf(shape, centre, cfg.seeing_fwhm, 3.2, amplitude)
+    def local_fwhm(self, x: float, y: float) -> float:
+        """Seeing width at a field position.
 
-    def _psf_kernel(self, size: int = 0) -> np.ndarray:
+        Real optics degrade off-axis, so a PSF measured at the centre does
+        not describe the corners.  The model here is the simple one that
+        matches what a telescope actually does: the width grows with the
+        square of the distance from the optical axis, since defocus and
+        field curvature are both second-order in field angle.
+        """
+        cfg = self.config
+        if not cfg.seeing_variation:
+            return float(cfg.seeing_fwhm)
+        ny, nx = cfg.shape
+        ox = cfg.optical_axis[0] if cfg.optical_axis else (nx - 1) / 2.0
+        oy = cfg.optical_axis[1] if cfg.optical_axis else (ny - 1) / 2.0
+        half_diagonal = 0.5 * math.hypot(nx, ny)
+        radius = math.hypot(float(x) - ox, float(y) - oy) / max(half_diagonal, 1e-9)
+        return float(cfg.seeing_fwhm * (1.0 + cfg.seeing_variation * radius ** 2))
+
+    def _psf_stamp(self, shape, centre, amplitude: float,
+                   position: Optional[Tuple[float, float]] = None) -> np.ndarray:
+        cfg = self.config
+        fwhm = self.local_fwhm(*position) if position is not None else cfg.seeing_fwhm
+        if cfg.psf == "gaussian":
+            return gaussian_psf(shape, centre, fwhm, amplitude)
+        return moffat_psf(shape, centre, fwhm, 3.2, amplitude)
+
+    def _psf_kernel(self, size: int = 0,
+                    position: Optional[Tuple[float, float]] = None) -> np.ndarray:
         """Normalised convolution kernel matching the configured seeing.
 
         Extended objects must be blurred by the *same* PSF as the stars,
@@ -139,10 +166,10 @@ class SkySimulator:
         """
         cfg = self.config
         if not size:
-            size = int(2 * np.ceil(4.0 * cfg.seeing_fwhm) + 1)
+            size = int(2 * np.ceil(4.0 * cfg.seeing_fwhm * (1.0 + cfg.seeing_variation)) + 1)
         size = max(5, int(size) | 1)
         centre = ((size - 1) / 2.0, (size - 1) / 2.0)
-        kernel = self._psf_stamp((size, size), centre, 1.0)
+        kernel = self._psf_stamp((size, size), centre, 1.0, position)
         total = float(kernel.sum())
         return kernel / total if total > 0 else kernel
 
@@ -161,11 +188,11 @@ class SkySimulator:
     def add_star(self, canvas: np.ndarray, x: float, y: float, flux: float,
                  variable: bool = False) -> TruthObject:
         """Render a point source convolved with the seeing PSF."""
-        half = int(np.ceil(6 * self.config.seeing_fwhm))
+        half = int(np.ceil(6 * self.local_fwhm(x, y)))
         bounds = self._stamp_bounds(x, y, half)
         if bounds is not None:
             region, centre, shape = bounds
-            stamp = self._psf_stamp(shape, centre, 1.0)
+            stamp = self._psf_stamp(shape, centre, 1.0, position=(x, y))
             total = stamp.sum()
             if total > 0:
                 canvas[region] += stamp * (flux / total)
