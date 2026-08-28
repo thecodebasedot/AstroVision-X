@@ -596,6 +596,131 @@ implying 244 km/s — squarely the SLACS regime for an early-type galaxy lens.
 
 Tests: `tests/test_lens_model.py`.
 
+## Spectroscopy
+
+**Setup.** Simulated long-slit frames: a curved trace, a cubic dispersion,
+seeing that worsens to the blue, the night sky with its emission lines,
+Poisson and read noise, and cosmic rays. Galaxy spectra carry absorption of
+the right depth and emission lines whose *ratios* follow one ionisation
+parameter, so a diagnostic test cannot succeed on unphysical input.
+
+### Extraction
+
+| Quantity | Result |
+| --- | --- |
+| Trace accuracy | 0.014 px rms, 0.019 px worst, against a trace curving 2 px |
+| Sky subtraction | median residual 0.05 counts against a 131-count sky |
+| Reported errors | within 6 % of the scatter of repeated exposures |
+| Optimal vs best fixed aperture | +3 % in signal-to-noise |
+| Optimal vs a reasonable aperture (±5 rows) | +16 % |
+| Corrupted columns, 20 cosmic rays, boxcar | 13 of 11200 |
+| Corrupted columns, profile weighting, no rejection | 25 |
+| Corrupted columns, profile weighting with rejection | **0** |
+
+The signal-to-noise gain from optimal extraction is small and the textbook
+claim is easy to overstate: a Gaussian profile is forgiving, and a well-chosen
+aperture already recovers most of what is available. The rejection is where
+the value is.
+
+### Wavelength calibration
+
+All 26 arc lines are found and identified. Fitted at the polynomial order that
+generated the data:
+
+| Order | Fit residual | True wavelength error, inside the fitted range |
+| --- | --- | --- |
+| 1 | 4.76 Å | *refused* |
+| 2 | 1.69 Å | *refused* |
+| 3 | 0.52 Å | 0.10 Å rms, 0.38 Å worst |
+| 4 | 0.50 Å | 0.16 Å rms, 0.67 Å worst |
+
+The 0.5 Å residual floor is the centroiding error, about an eighth of a pixel,
+not a failure of the fit. A **misidentification by one line leaves 3.7 Å**,
+which is what sets the refusal threshold between them.
+
+Identifying the lines from a linear first guess fails in a way that looks like
+success: the residual settled at 3.4–3.9 Å at every order, including order 3.
+The pairwise vote fixes it. The vote itself places only 16 of 26 lines, which
+is not a defect — no linear solution fits a cubic dispersion — and is ample to
+anchor the polynomial refinement that then picks up all 26.
+
+Night-sky check on a correctly calibrated frame: offset −0.03 ± 0.03 Å with
+0.10 Å scatter over 14 lines, and an injected 3 Å flexure is recovered as
+2.96 Å. Handed the sky-*subtracted* spectrum instead the same check gives −0.4
+with 2.8 Å of scatter — not wrong, but blind to anything under a pixel.
+
+### Redshifts
+
+Recovery on spectra at signal-to-noise 15, redshifts 0.02–0.55: **median
+|Δz/(1+z)| = 7 × 10⁻⁵**, about 21 km/s, with no outliers in 18.
+
+The interesting measurement is the reliability flag, since the flag is the
+product and not the number:
+
+| Median S/N per pixel | Reported reliable | Of which correct | Purity | Completeness |
+| --- | --- | --- | --- | --- |
+| 30 | 12/12 | 12 | 1.00 | 1.00 |
+| 15 | 12/12 | 12 | 1.00 | 1.00 |
+| 8 | 10/12 | 10 | 1.00 | 0.83 |
+| 5 | 11/12 | 10 | 0.91 | 0.83 |
+| 3 | 4/12 | 1 | **0.25** | 0.08 |
+| pure noise | **0/20** | — | — | — |
+
+**Below S/N ≈ 5 the reliability flag stops meaning anything**, and that is the
+honest limit of this implementation. Above it, no pure-noise spectrum and no
+wrong answer at S/N ≥ 8 survives the gates.
+
+Both gates were placed from measurement, and the two do different jobs:
+
+| Gate | What it removes | What it costs |
+| --- | --- | --- |
+| R ≥ 7 | 40/40 pure-noise spectra | 3 of 24 correct at S/N 3–8 |
+| Peak ratio ≥ 1.3 | 63 % of wrong redshifts | 21 % of right ones |
+
+R alone cannot do the second job: wrong redshifts at low S/N reached R = 24,
+as strong as the right answers.
+
+### Lines and diagnostics
+
+Line ratios against the values the simulator drew, at S/N 30:
+
+| Ratio | Ionisation 0.2 | Ionisation 0.6 |
+| --- | --- | --- |
+| [N II]/H-alpha | 0.315 vs 0.316 (**0 %**) | 0.790 vs 0.804 (−2 %) |
+| [O III]/H-beta | +14 % | +5 % |
+
+The residual [O III]/H-beta bias is stellar Balmer absorption not fully
+recovered; before the absorption component was fitted it was +19 % at every
+ionisation.
+
+BPT classification across the ionisation sequence, against the region the
+drawn ratios actually fall in: **7/7**, including the composite region and
+both sides of the Seyfert/LINER division.
+
+### Supernova typing
+
+Types Ia, Ib, Ic and II at three phases each and three signal-to-noise levels,
+36 spectra:
+
+| | Result |
+| --- | --- |
+| Type claimed | 30/36 |
+| Of those, correct | **30 (purity 1.00)** |
+| Completeness | 0.83 |
+| Wrong types claimed | **0** |
+
+Every refusal is a Type Ic, which is exactly right: Ic is defined by what it
+*lacks* — no hydrogen, no helium, no strong silicon — so it has the fewest
+distinctive features and is genuinely the hardest to match. The classifier
+refuses rather than guessing.
+
+The quality statistic behaves differently here than for galaxy redshifts: it
+is flat at R ≈ 7–9 from S/N 50 down to 5, and only collapses below 2. For
+broad-featured spectra R measures how well the template *shape* matches, not
+how good the data are.
+
+Tests: `tests/test_spectra.py`.
+
 ## Photometric redshifts
 
 **Setup.** 400 galaxies per configuration, each drawn from a spectrum with

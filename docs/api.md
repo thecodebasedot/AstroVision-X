@@ -214,6 +214,53 @@ arcs = ray_trace(shape, model, source_x, source_y, source_radius,
                  source_flux=1.0e4)
 ```
 
+## Spectroscopy
+
+```python
+from astrovision.spectra import (analyse_frame, analyse_spectrum, classify_bpt,
+                                 classify_supernova, extract_spectrum, fit_lines,
+                                 fit_wavelength_solution, measure_redshift)
+
+# A long-slit frame, an arc exposure and a line list
+analysis = analyse_frame(image, variance, arc=arc_image, line_list=arc_lines,
+                         sky_lines=sky_lines, resolution=5.0)
+analysis.summary()                      # one readable line
+analysis.stopped_at                     # "" when it ran to the end
+analysis.redshift.z, analysis.redshift.reliable, analysis.redshift.r_statistic
+analysis.bpt.classification             # star-forming / composite / Seyfert / LINER
+analysis.lines["H alpha"].flux, analysis.lines["H alpha"].detected
+
+# Or the pieces
+spectrum, trace = extract_spectrum(image, variance, method="optimal")
+solution = fit_wavelength_solution(arc_1d, arc_lines, order=3)
+solution.succeeded, solution.rms, solution.reason
+result = measure_redshift(calibrated)
+lines = fit_lines(calibrated, result.z, resolution=5.0)
+match = classify_supernova(calibrated, redshift=0.03)
+match.sn_type, match.confident, match.caveat
+```
+
+A step that cannot be done is not done: without an arc the spectrum keeps a
+column axis, and without a reliable redshift no lines are fitted — each would
+otherwise produce numbers with nothing behind them. `analysis.stopped_at` says
+which. Supernova typing is the exception and runs regardless, because a
+supernova is not a galaxy and the galaxy correlation failing on one is the
+expected outcome; pass the host `redshift` when it is known.
+
+Simulated frames come from `astrovision.simulate.spectrograph`:
+
+```python
+from astrovision.simulate.spectrograph import (ARC_LINES, SKY_LINES,
+                                               SpectrographConfig,
+                                               SpectrographSimulator)
+from astrovision.spectra import galaxy_spectrum, supernova_spectrum
+
+simulator = SpectrographSimulator(SpectrographConfig(seed=1))
+frame = simulator.object_frame(galaxy_spectrum(3.0, emission=1.2), redshift=0.12)
+arc = simulator.arc_frame()
+quick = simulator.extracted(supernova_spectrum("Ia", 0.0), redshift=0.02, snr=20)
+```
+
 ## Reports
 
 ```python

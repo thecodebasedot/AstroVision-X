@@ -202,6 +202,7 @@ for source in analysis.catalog:
 | Novelty | Isolation forest + autoencoder + k-NN isolation, rank-combined |
 | Strong lensing | Tangential arcs at a shared radius; radial scan for full rings |
 | Lens mass models | Isothermal ellipsoid + external shear fitted to arc positions, Einstein mass |
+| Spectroscopy | Long-slit extraction, arc calibration, cross-correlation redshifts, line fitting, BPT and supernova typing |
 | Populations | Number counts, completeness turnover, Landy–Szalay clustering |
 
 ---
@@ -226,6 +227,12 @@ bad columns. They are *not* claims about real survey data.
 | Astrometric solution | 3.5″ header error → 0.047″, 0.110″ rms |
 | Photometric zero point | 24.987 ± 0.002 against a true 25.000 |
 | Probability calibration | expected calibration error 0.112 → 0.027 |
+| Spectroscopic redshift | 7 × 10⁻⁵ in Δz/(1+z) — about 21 km/s |
+| Spectroscopic redshift purity | 1.00 at S/N ≥ 8, 0.91 at 5, 0.25 at 3 |
+| Wavelength solution | 0.10 Å rms against truth, from a 26-line arc |
+| Line ratios ([N II]/Hα) | within 2 % of the drawn value |
+| BPT classification | 7/7 across the ionisation sequence |
+| Supernova typing | 30/36 typed, all 30 correct, 0 wrong |
 | Photometric redshift (5 filters) | scatter 0.015 in Δz/(1+z), 2.8 % outliers |
 | Photometric redshift (3 filters) | scatter 0.043, 22 % outliers — the filter count dominates |
 | Galaxy morphology (5 classes) | 59 % exact, 78 % at family level |
@@ -245,6 +252,14 @@ because they count photon and read noise but not sky estimation, blending or
 PSF-matching residuals; and Sérsic fits are effectively degenerate in
 `n` against `r_eff`, which is why they carry a correlation and a flag rather
 than a bare index.
+
+Two spectroscopic limits belong in the same paragraph as the numbers above.
+Below signal-to-noise about 5 per pixel the redshift reliability flag stops
+meaning anything — purity falls to 0.25 — because a catastrophic failure at
+that depth is not a weak correlation but a confident match to the wrong
+feature. And the winning template is not a classification: a quasar here is
+matched by the starburst template and still gets the right redshift, which is
+the correlation working as designed rather than failing.
 
 The lens numbers changed for a reason worth naming. Simulated lenses now
 produce their arcs by **ray tracing through a mass model** instead of having

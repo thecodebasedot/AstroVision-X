@@ -383,6 +383,23 @@ class PhotoZConfig(_Section):
 
 
 @dataclass
+class SpectroscopyConfig(_Section):
+    """Long-slit extraction, calibration and spectral measurement."""
+
+    enabled: bool = True
+    extraction: str = "optimal"            # or "boxcar"
+    trace_order: int = 2
+    aperture_half_width: float = 8.0
+    resolution: float = 5.0                # instrumental FWHM, Angstroms
+    wavelength_order: int = 3
+    z_min: float = -0.005
+    z_max: float = 1.2
+    velocity_step_km_s: float = 50.0
+    classify_transients: bool = False
+    max_line_velocity_km_s: float = 600.0
+
+
+@dataclass
 class CosmologyConfig(_Section):
     """Cosmological parameters used by the astrophysics layer."""
 
@@ -427,6 +444,7 @@ class AstroVisionConfig(_Section):
     lensing: LensingConfig = field(default_factory=LensingConfig)
     clustering: ClusteringConfig = field(default_factory=ClusteringConfig)
     photoz: PhotoZConfig = field(default_factory=PhotoZConfig)
+    spectroscopy: SpectroscopyConfig = field(default_factory=SpectroscopyConfig)
     cosmology: CosmologyConfig = field(default_factory=CosmologyConfig)
     report: ReportConfig = field(default_factory=ReportConfig)
 

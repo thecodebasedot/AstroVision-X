@@ -306,6 +306,157 @@ magnitude. It is fitted only when the standards span enough colour to
 constrain it — a slope fitted to points all at the same colour returns a large
 coefficient with a small formal error, which is the worst possible pairing.
 
+## Spectroscopy
+
+A spectrum is where most of the statements in this package stop being
+inferences and start being measurements — a redshift good to 20 km/s instead
+of 4 %, a line ratio that names the ionising source, a supernova type. The
+price is that far more can go wrong before the numbers exist at all.
+
+### From a frame to a spectrum
+
+The spectrum is not a row of the detector. It is a curved path, and summing a
+fixed band of rows loses flux at the ends of the order — a smooth,
+wavelength-dependent loss indistinguishable from a broad spectral feature. The
+trace is centroided in binned column groups, then fitted with a low-order
+polynomial: a per-column centroid is itself noisy, and following that noise is
+as bad as ignoring the curvature.
+
+The sky is brighter than the target over most of the optical and its emission
+lines are far brighter, so it is estimated in each column separately from rows
+away from the object, robustly, with a low-order fit along the slit.
+
+Extraction is profile-weighted after Horne (1986), each pixel weighted by
+profile over variance. What that buys is worth stating precisely rather than
+by reputation: against the *best* fixed aperture it gains 3 % in
+signal-to-noise, and against a merely reasonable one 16 %. A Gaussian profile
+is forgiving, and a well-chosen aperture already recovers most of what is
+there. The real gains are not having to know the right aperture in advance,
+and cosmic-ray rejection — a pixel far from the profile-scaled model is a hit,
+not a photon, and dropping it does not cost the column.
+
+### Wavelength calibration
+
+The dispersion is not linear, and a linear solution leaves several Angstroms
+of systematic residual at the ends of the order — at 5000 Å that is a redshift
+error larger than the statistical error of a good cross-correlation.
+
+The harder problem is identifying the arc lines in the first place. Matching
+peaks to their nearest predicted wavelength needs a first guess, and a linear
+guess for a non-linear dispersion is wrong by tens of Angstroms mid-detector,
+which is comparable to the line spacing. Lines then get identified one over,
+the polynomial absorbs the error, and the residual settles at a few Angstroms
+at *every* order — including the order that generated the data. So the
+identification does not start from a guess. Every pair of detected peaks is
+compared with every pair of catalogue lines and votes for the linear solution
+it implies; the right answer collects votes from many independent pairs, a
+wrong one collects a few by chance. This is the same idea as pattern-matching
+an astrometric field: use the relative geometry, which is invariant, not the
+absolute positions, which are what is unknown.
+
+A solution is refused when its residual exceeds 0.3 of a resolution element.
+That threshold is not taste: a correct identification lands at the centroiding
+floor of about 0.5 Å here, and a one-line misidentification lands at 3.7 Å.
+
+The arc is exposed at a different time and often a different telescope
+position from the science frame, and flexure between them shifts the solution
+bodily. The night-sky lines are *in* the science frame at known wavelengths,
+so they measure that shift directly — the check that catches a calibration
+which is internally perfect and externally wrong. It needs the sky spectrum,
+not the sky-subtracted one: after subtraction only residuals remain, and a
+residual's centroid describes how the subtraction failed.
+
+### Redshifts
+
+A spectroscopic redshift is a *pattern* match, not a measurement of one line.
+Twenty absorption lines all shifted by the same fraction is an enormously
+stronger statement than any one of them, and the cross-correlation is the
+arithmetic that adds them up. Both spectra go onto a grid uniform in log
+wavelength, where a redshift is a pure shift rather than a stretch, so one
+correlation covers every redshift at once.
+
+Three things decide whether the peak means anything.
+
+**The continuum must exist before it can be divided out.** Every spectrograph
+has ends where the throughput collapses, and a redshifted object often has no
+flux at all over part of the detector. Dividing the remaining noise by a
+continuum near zero does not produce a faint spectrum, it produces a loud one:
+measured here, the normalised flux reached 2000 where real features reach 0.3,
+and the correlation returned a confident and entirely wrong redshift. Pixels
+without a continuum are masked.
+
+**R must be measured the way Tonry & Davis defined it.** A true match produces
+a *symmetric* correlation peak, because it is the autocorrelation of the
+template's own features; noise produces a lopsided one. Comparing the peak
+with the roughness of the background instead — the obvious simplification —
+gives R = 18.7 on pure noise, because the correlation of noise with a smooth
+template is itself smooth. Measured over the full overlap, the antisymmetric
+construction separates the two cleanly: forty noise spectra gave R from 3.6 to
+6.6, correct redshifts start at 5.6 with a median of 13.
+
+**R is not enough by itself.** At low signal-to-noise, wrong redshifts reach
+R = 24 — as strong a correlation as the right answers — because a catastrophic
+failure is not a weak match, it is a confident match to the wrong feature.
+What separates them is whether a rival explanation exists, so the winning peak
+must also lead the best peak at a different redshift by 30 % in R. Emission
+lines can overrule that: they are an independent identification, not another
+peak in the same correlation.
+
+The correlation measures a redshift, not a classification. A quasar here is
+matched by the starburst template — its narrow [O III] lines correlate better
+than its broad Balmer lines, at every continuum window tried — and the
+redshift is right anyway. The exception is stars, which are searched only
+within 3000 km/s of rest, because a star has a radial velocity and not a
+redshift; without that restriction a G-star template won the fit for a galaxy
+at z = 0.39, reporting the right redshift for entirely the wrong reason.
+
+### Lines
+
+Lines closer together than the widest profile the fit may give them are fitted
+*together*, sharing a velocity width — which is also what the physics says,
+since the same gas emits them. Getting that threshold from the instrumental
+resolution instead put [N II] 6584 just outside H-alpha's group, 20.7 Å apart
+against a 20 Å threshold; fitted alone it widened to the top of the velocity
+search, absorbed H-alpha's flux, and the [N II]/H-alpha ratio came out
+inverted — falling as the simulated ionisation rose.
+
+A Balmer emission line sits inside the stellar absorption trough of the same
+transition, and the trough is far wider than the line, so measuring the
+emission against a smooth continuum measures emission minus absorption. That
+error does not cancel in a ratio: [O III]/H-beta came out 19 % high at every
+ionisation. A broad component under each Balmer line fixes it — but only where
+it is identifiable. The trough is barely 1.5 times wider than the line it
+holds, so with another emission line 20 Å away it trades off freely against
+that neighbour; adding it under H-alpha moved [N II]/H-alpha from correct to
+44 % high. It is fitted for the isolated Balmer lines and not for H-alpha.
+
+A line that is not there still returns a fitted amplitude whose sign is
+decided by noise. Below three sigma the fit reports an upper limit instead,
+and a ratio built from one is labelled a limit rather than plotted as a point.
+
+### What the lines mean
+
+The BPT diagram separates gas ionised by young stars from gas ionised by an
+accreting black hole using two ratios of *adjacent* lines, so reddening and
+flux calibration cancel and the diagram works on uncalibrated data. Between
+the empirical star-forming boundary and the theoretical maximum-starburst line
+lies a real composite region where both contribute; reporting a composite as
+one or the other is not a rounding error but a different physical claim, so it
+is named. Past the asymptote of those curves every object is on the AGN side —
+treating the curve as infinitely high there classifies the hardest-ionised
+objects in a sample as star-forming.
+
+Supernova typing matches against templates in both type and phase, because the
+features move as the ejecta slow: a Type Ia a month after maximum looks nothing
+like one a week before it. A type is reported only when the match is strong
+*and* leads the best rival type by a margin; otherwise the answer is that the
+spectrum does not choose, which is what a coin toss deserves instead of a
+label.
+
+A spectral match is a classification of a spectrum. Whether the object is a
+supernova at all is settled by a light curve, a host association and a person,
+and the record says so on every confident type.
+
 ## Photometric redshifts
 
 A distance from four numbers. It works because a galaxy spectrum is not

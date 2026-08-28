@@ -61,6 +61,11 @@ The order is not arbitrary; each dependency is real.
 - **The known-object crossmatch comes after classification** and before the
   anomaly ranking, because what it changes is the priority of a *candidate*:
   an outlier that is already catalogued is not a discovery.
+- **Spectroscopy is a separate entry point, not a pipeline stage.** The
+  imaging pipeline runs over a field; a spectrum is one object on one slit,
+  and the two share templates and numerics but not a control flow. Inside it
+  the order is forced: no redshift without a wavelength solution, no line
+  ratios without a redshift, and each step records where it stopped.
 - **The mass model runs inside the lensing stage, after the arcs are found**,
   because it needs positions along real arcs rather than the candidate's
   summary numbers. It is also allowed to fail without removing the candidate:
