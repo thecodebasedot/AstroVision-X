@@ -9,7 +9,7 @@ distance from the centre.  That is what this module measures.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -40,6 +40,12 @@ class Arc:
     peak_significance: float
     flux: float
     area: int
+    #: Flux-weighted ridge positions along the arc, in cutout pixels.  Kept
+    #: because a mass model needs the arc's actual *shape*: points rebuilt
+    #: from ``radius`` and ``angle`` lie on a perfect circle, which a round
+    #: lens reproduces exactly, so a fit given those can only ever measure a
+    #: radius and reports every lens as circular.
+    points: np.ndarray = field(default_factory=lambda: np.zeros((0, 2)))
 
     def to_dict(self) -> Dict[str, Any]:
         return {"radius": float(self.radius), "angle": float(self.angle),
@@ -81,6 +87,33 @@ def subtract_smooth_light(cutout: np.ndarray, centre: Tuple[float, float],
         if member.sum() >= 4:
             model[member] = float(np.percentile(values[member], percentile))
     return (values - model).reshape(data.shape)
+
+
+def _ridge_points(xs: np.ndarray, ys: np.ndarray, weights: np.ndarray,
+                  centre: Tuple[float, float], n_bins: int = 9) -> np.ndarray:
+    """Flux-weighted centre of the arc at several points along its length.
+
+    Binned by azimuth about the deflector, because that is the direction an
+    arc runs: within one bin the arc is a short radial profile whose weighted
+    mean is its ridge.  The result traces the arc's real curvature, which is
+    what tells an elliptical mass distribution from a round one.
+    """
+    angles = np.degrees(np.arctan2(ys - centre[1], xs - centre[0]))
+    # Unwrap about the arc's own mean so a segment crossing +-180 stays whole.
+    reference = float(np.degrees(np.arctan2(
+        float((weights * np.sin(np.radians(angles))).sum()),
+        float((weights * np.cos(np.radians(angles))).sum()))))
+    relative = (angles - reference + 180.0) % 360.0 - 180.0
+    edges = np.linspace(relative.min(), relative.max(), int(n_bins) + 1)
+    points = []
+    for low, high in zip(edges[:-1], edges[1:]):
+        inside = (relative >= low) & (relative <= high)
+        total = float(weights[inside].sum())
+        if total <= 0 or inside.sum() < 2:
+            continue
+        points.append((float((weights[inside] * xs[inside]).sum() / total),
+                       float((weights[inside] * ys[inside]).sum() / total)))
+    return np.asarray(points, dtype=float).reshape(-1, 2)
 
 
 def detect_arcs(cutout: np.ndarray, centre: Optional[Tuple[float, float]] = None,
@@ -165,6 +198,7 @@ def detect_arcs(cutout: np.ndarray, centre: Optional[Tuple[float, float]] = None
             continue
 
         arcs.append(Arc(
+            points=_ridge_points(xs, ys, weights, centre),
             radius=arc_radius, angle=angle,
             length=float(4.0 * major), width=float(2.0 * minor),
             axis_ratio=axis_ratio, tangential_alignment=alignment,

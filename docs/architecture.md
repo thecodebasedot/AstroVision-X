@@ -61,6 +61,11 @@ The order is not arbitrary; each dependency is real.
 - **The known-object crossmatch comes after classification** and before the
   anomaly ranking, because what it changes is the priority of a *candidate*:
   an outlier that is already catalogued is not a discovery.
+- **The mass model runs inside the lensing stage, after the arcs are found**,
+  because it needs positions along real arcs rather than the candidate's
+  summary numbers. It is also allowed to fail without removing the candidate:
+  detection and measurement are separate claims and are kept separate in the
+  record.
 - **The lensing search needs classification** because it only examines objects
   massive and early-type enough to lens; searching every source for arcs
   produces mostly false positives.

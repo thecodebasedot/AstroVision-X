@@ -494,6 +494,15 @@ class LensCandidate:
     einstein_radius_px: float = float("nan")
     einstein_radius_arcsec: float = float("nan")
     colour_contrast: float = float("nan")
+    #: Results of the mass-model fit, when there were enough arcs to fit one.
+    #: Empty is a real answer -- a candidate that cannot be modelled is still
+    #: a candidate -- so these stay separate from the detection numbers above.
+    model: Dict[str, Any] = field(default_factory=dict)
+    model_theta_e_arcsec: float = float("nan")
+    model_axis_ratio: float = float("nan")
+    model_shear: float = float("nan")
+    model_image_rms_px: float = float("nan")
+    mass: Dict[str, Any] = field(default_factory=dict)
     verdict: Verdict = Verdict.WORTH_A_LOOK
     notes: List[str] = field(default_factory=list)
 

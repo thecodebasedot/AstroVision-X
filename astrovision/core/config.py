@@ -347,6 +347,15 @@ class LensingConfig(_Section):
     ring_bins: int = 72
     score_threshold: float = 0.5
     search_radius_factor: float = 4.0
+    #: Fit a mass model to the arcs of every candidate that has enough of them.
+    fit_model: bool = True
+    fit_shear: bool = True
+    points_per_arc: int = 7
+    model_bootstrap: int = 16
+    #: Redshifts for the mass.  The lens's own is used when a photometric one
+    #: was measured; the source's cannot be had from imaging and is assumed.
+    assumed_lens_redshift: float = 0.5
+    assumed_source_redshift: float = 2.0
 
 
 @dataclass

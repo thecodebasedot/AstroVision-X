@@ -27,6 +27,7 @@ from ..core.types import (
 )
 from ..io.image import AstroImage
 from .arcs import Arc, detect_arcs, detect_ring, einstein_radius, ring_completeness
+from .model import arc_sample_points, einstein_mass, fit_lens_model
 
 log = get_logger("lensing.lens")
 
@@ -204,6 +205,9 @@ class LensSearch:
                 verdict=_verdict(score),
                 notes=_notes(arcs, ring, theta_e * pixel_scale, breakdown),
             )
+            if cfg.fit_model:
+                self._fit_model(candidate, source, arcs, centre, theta_e,
+                                pixel_scale)
             candidates.append(candidate)
             source.add_flag("lens_candidate")
             if source.object_class in (ObjectClass.GALAXY, ObjectClass.UNKNOWN):
@@ -219,6 +223,56 @@ class LensSearch:
         log.info("lens search: %d candidates from %d plausible deflectors",
                  len(candidates), n_examined)
         return candidates
+
+    def _fit_model(self, candidate, source, arcs, centre, theta_e_px: float,
+                   pixel_scale: float) -> None:
+        """Fit a mass model to the arcs and attach the mass it implies.
+
+        The fit is attempted, not assumed: with one short arc there are fewer
+        constraints than parameters and the routine refuses, which is
+        recorded on the candidate rather than passed over.  A candidate that
+        cannot be modelled is still a candidate.
+        """
+        cfg = self.config
+        points = arc_sample_points(arcs, centre, per_arc=cfg.points_per_arc)
+        fit = fit_lens_model(points, centre, theta_e_guess=theta_e_px,
+                             fit_shear=cfg.fit_shear,
+                             bootstrap=cfg.model_bootstrap)
+        candidate.model = fit.to_dict()
+        if not fit.succeeded or fit.model is None:
+            candidate.notes.append(f"No mass model: {fit.reason}")
+            return
+
+        candidate.model_theta_e_arcsec = float(fit.model.theta_e * pixel_scale)
+        candidate.model_axis_ratio = float(fit.model.axis_ratio)
+        candidate.model_shear = float(fit.model.shear_magnitude)
+        candidate.model_image_rms_px = float(fit.image_rms)
+
+        # A mass needs both redshifts.  The lens's own may have been measured
+        # photometrically; the source's essentially never has been from
+        # imaging alone, so it is assumed and labelled as assumed.
+        photoz = source.meta.get("photoz") or {}
+        z_lens = float(photoz.get("z", float("nan")))
+        z_lens_source = "photometric"
+        if not np.isfinite(z_lens) or z_lens <= 0:
+            z_lens, z_lens_source = cfg.assumed_lens_redshift, "assumed"
+        z_source = cfg.assumed_source_redshift
+        mass = einstein_mass(candidate.model_theta_e_arcsec, z_lens, z_source)
+        mass["z_lens_source"] = z_lens_source
+        mass["z_source_source"] = "assumed"
+        candidate.mass = mass
+        if np.isfinite(mass.get("log_mass_solar", float("nan"))):
+            candidate.notes.append(
+                f"Mass model: Einstein radius {candidate.model_theta_e_arcsec:.2f} "
+                f"arcsec, axis ratio {fit.model.axis_ratio:.2f}, external shear "
+                f"{fit.model.shear_magnitude:.3f}; implied projected mass "
+                f"{mass['mass_solar']:.2e} solar masses inside it, for a "
+                f"{z_lens_source} lens redshift {z_lens:.2f} and an assumed "
+                f"source redshift {z_source:.1f}. The mass scales as the square "
+                "of the Einstein radius and with the distance ratio, so an "
+                "assumed redshift is where its error lives.")
+        for flag in fit.flags:
+            candidate.notes.append(f"Model note: {flag.replace('_', ' ')}.")
 
     def _score(self, arcs: List[Arc], theta_e: float, scatter: float,
                ring: Dict[str, float], plausibility: float,

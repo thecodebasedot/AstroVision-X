@@ -571,6 +571,77 @@ The implied velocity dispersion is computed for a singular isothermal sphere as
 a sanity check — a candidate implying 600 km/s is not a galaxy-scale lens — but
 without redshifts the distance ratio must be assumed, and the report says so.
 
+### The mass model
+
+Detecting arcs says a lens may be there. Measuring the mass needs a model, and
+the model used is a **singular isothermal ellipsoid with external shear** —
+the standard first model for a galaxy-scale lens, because an isothermal
+profile is what stellar dynamics and lensing independently find for early-type
+galaxies, and because its deflection has a closed form (Keeton 2001) rather
+than needing an integral at every pixel. As the lens becomes round the
+ellipsoid formulae divide by `sqrt(1 - q²)`, so below a set flattening the
+code switches to the exact isothermal *sphere* limit instead of computing
+zero over zero.
+
+External shear is the tidal field of everything else along the line of sight,
+represented as a traceless stretch: it distorts images without adding mass.
+It is nearly always needed — a lens with no neighbours is the exception — and
+leaving it out makes the ellipsoid absorb the stretch, which measurably
+flattens the fitted mass.
+
+The fit minimises **source-plane scatter**: every arc position is mapped back
+through the lens equation `β = θ − α(θ)`, and a correct model sends them all
+to the same place. This is far cheaper than the image-plane alternative, which
+would need the lens equation solved for every trial model. The price is that
+source-plane scatter is weighted by magnification, so it is quoted alongside
+the image-plane residual, which is in pixels and means what a reader expects
+it to mean.
+
+Two things about that fit are worth stating plainly, because both were
+measured rather than assumed:
+
+**Ellipticity and shear are degenerate, and coverage is what breaks the
+degeneracy.** Both stretch images; separating them requires seeing the stretch
+from more than one direction. Fitting ray-traced images spanning 140° to 267°
+around the lens, everything above about 220° recovered the axis ratio to
+within 0.06 and the shear to within 0.05, while everything between 140° and
+165° with the shear free collapsed to an axis ratio near 0.2 with a shear of
+0.4 — the lens's own flattening reappearing as a fictitious tidal field. So
+the shear is only fitted when the arcs span at least 200° around the
+deflector, and the report says when it was held at zero and why.
+
+**A large fitted shear is tested, not assumed to be wrong.** When the free fit
+still wants a shear beyond 0.3, the model is refitted without it and the two
+are compared. If dropping the shear barely worsens the fit, the shear was
+buying nothing and is dropped; if dropping it wrecks the fit, the shear is
+real and is kept with a warning. In the measured cases the two are far apart:
+a spurious shear costs a factor 1.0–1.7 in scatter to remove, a real one 16–30.
+
+Errors come from a **bootstrap over the arc positions**, not from the
+curvature of the objective. With few positions and strongly correlated
+parameters, a curvature estimate understates the error badly — it describes a
+parabola the likelihood does not have.
+
+Finally, the fit refuses rather than overfits. Each position supplies two
+numbers but also costs the two unknowns of the shared source position, so *N*
+positions give `2N − 2` constraints; below the parameter count the routine
+returns no model and records why. A candidate with one short arc stays a
+candidate — it is simply one that cannot be weighed.
+
+### From an Einstein radius to a mass
+
+The projected mass inside the Einstein radius follows directly:
+
+    M_E = (c² / 4G) · (D_L D_S / D_LS) · θ_E²
+
+with no assumption about how the mass is distributed — that is the reason this
+quantity, rather than a total mass, is the one lensing measures well. What it
+does need is both redshifts. The deflector's may be photometric, from the
+redshift stage; the source's essentially never is from imaging alone. It is
+assumed, labelled `assumed` in the record, and the note that quotes the mass
+says so and says that the mass scales as `θ_E²` and with the distance ratio,
+which is where its error lives.
+
 ## Novelty
 
 Three detectors with different blind spots are combined: an isolation forest
@@ -593,3 +664,8 @@ and ultimately spectroscopic redshifts for both. A morphological type from a
 single band at survey depth is a useful prior, not a measurement. Physical
 quantities derived from an assumed redshift are order-of-magnitude estimates,
 and every assumption is listed in the report that quotes them.
+
+A fitted mass model is not an exception to that. It converts an Einstein
+radius into a mass under an assumed profile and an assumed source redshift; it
+does not establish that the object is a lens. That still takes colours, a
+second look, and spectroscopy.

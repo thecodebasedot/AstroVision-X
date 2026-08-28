@@ -178,6 +178,42 @@ Enable the bootstrap in the pipeline with `config.morphology.uncertainty = True`
 it is off by default because it costs `bootstrap_samples` times the shape
 measurement.
 
+## Lens mass models
+
+```python
+from astrovision.lensing import (LensModel, arc_sample_points, einstein_mass,
+                                 fit_lens_model, ray_trace)
+
+model = LensModel(x0=64.0, y0=64.0, theta_e=12.0, axis_ratio=0.7,
+                  position_angle=35.0, shear1=0.03, shear2=-0.02)
+model.deflection(x, y)                  # alpha, in pixels
+model.source_plane(x, y)                # beta = theta - alpha
+model.magnification(x, y)               # signed; diverges on the critical curve
+
+fit = fit_lens_model(points, centre=(64.0, 64.0), theta_e_guess=12.0)
+fit.succeeded, fit.reason               # a refusal explains itself
+fit.model.axis_ratio, fit.model.shear_magnitude
+fit.theta_e_error                       # bootstrap over the arc positions
+fit.image_rms                           # residual in pixels
+fit.flags                               # e.g. shear_fixed_to_zero
+
+einstein_mass(1.2, z_lens=0.4, z_source=2.0)["mass_solar"]
+```
+
+Candidates from `LensSearch` carry the same results: `candidate.model`,
+`candidate.model_theta_e_arcsec`, `candidate.model_axis_ratio` and
+`candidate.mass`. A candidate whose arcs give fewer constraints than
+parameters is still a candidate — `candidate.model["model"]` is `None` and a
+note says why. Turn the fit off with `config.lensing.fit_model = False`.
+
+The simulator can ray-trace a source through a model, which is how the fit is
+tested against arcs it did not draw:
+
+```python
+arcs = ray_trace(shape, model, source_x, source_y, source_radius,
+                 source_flux=1.0e4)
+```
+
 ## Reports
 
 ```python

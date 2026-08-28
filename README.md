@@ -201,6 +201,7 @@ for source in analysis.catalog:
 | Variability | Reduced χ², Stetson J, von Neumann η, Lomb–Scargle periods |
 | Novelty | Isolation forest + autoencoder + k-NN isolation, rank-combined |
 | Strong lensing | Tangential arcs at a shared radius; radial scan for full rings |
+| Lens mass models | Isothermal ellipsoid + external shear fitted to arc positions, Einstein mass |
 | Populations | Number counts, completeness turnover, Landy–Szalay clustering |
 
 ---
@@ -230,7 +231,9 @@ bad columns. They are *not* claims about real survey data.
 | Galaxy morphology (5 classes) | 59 % exact, 78 % at family level |
 | Transient recall | 12/14, with 2 spurious over five fields |
 | Moving-object recall | 10/10, 0 spurious over ten fields |
-| Strong-lens recall | 8/14, with 3 false positives over five fields |
+| Strong-lens recall | 4/15, with 9 false positives over five fields (ray-traced arcs) |
+| Lens model on exact constraints | θ_E, axis ratio, angle and shear all recovered |
+| Lens model on detected arcs | θ_E 20 % median error, axis ratio 0.13 |
 | CNN stamp classification | 85 % on a 266-stamp training set |
 | LSTM light-curve classification | 92 % over six variability classes |
 
@@ -242,6 +245,14 @@ because they count photon and read noise but not sky estimation, blending or
 PSF-matching residuals; and Sérsic fits are effectively degenerate in
 `n` against `r_eff`, which is why they carry a correlation and a flag rather
 than a bare index.
+
+The lens numbers changed for a reason worth naming. Simulated lenses now
+produce their arcs by **ray tracing through a mass model** instead of having
+them painted at a chosen radius, and recall against them is 4/15 rather than
+the 8/14 measured against painted arcs. The search did not get worse — the
+test stopped drawing the answer for it. Ray-traced systems often show one
+faint image where a painted one showed a tidy pair, and single-arc detections
+are also where the false positives come from.
 
 Colour is the case worth spelling out. Adding it to star/galaxy separation
 changes 93.9 % to 93.7 % — one object in 442, which is to say nothing. At

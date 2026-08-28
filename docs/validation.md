@@ -483,13 +483,29 @@ Tests: `TestIsolationForest::*`, `TestAutoencoder::*`.
 ## Strong lensing
 
 **Setup.** 320 × 320 fields with three injected lens systems each, five seeds,
-14 matched deflectors.
+15 injected deflectors. Lensed images are produced by **ray tracing through a
+mass model**, not painted at a chosen radius.
 
-**Result.** 8/14 recovered with 3 false positives. Einstein radii are recovered
-to within 10 % when arcs are detected (13.0–13.7 px for a true 14.0).
+**Result.** 4/15 recovered with 9 false positives.
+
+That is a large downgrade from the 8/14 with 3 false positives this document
+reported previously, and the reason is worth stating plainly: **the old number
+was measured against arcs that were drawn rather than lensed.** Painted arcs
+are placed at a chosen radius with chosen spans and chosen brightness, and
+the search was, in effect, being asked to find the thing that had been drawn
+for it. Ray-traced arcs are whatever the mass model actually produces — often
+a single faint image rather than a tidy pair, and frequently below the arc
+finder's threshold. The search did not get worse; the test got honest.
+
+Where the recall goes: of the eleven missed systems, most produce one arc too
+faint or too short to clear the detection threshold. The false positives are
+almost all single-arc detections around ordinary galaxies, scoring just over
+the threshold — the score rewards arc multiplicity, and a single arc is weak
+evidence being counted as some evidence.
 
 Detection depends strongly on arc geometry, which is honest — that is also true
-of real searches:
+of real searches. The table below uses *painted* arcs, where span and count can
+be set directly, which is what makes the dependence visible:
 
 | Configuration | Arcs found | θ_E recovered | Ring detected |
 | --- | --- | --- | --- |
@@ -506,6 +522,79 @@ see; the radial ring scan catches those instead. A plain elliptical galaxy
 produces no arcs and no ring, which is the property that matters most.
 
 Tests: `TestLensing::*`.
+
+### The mass model
+
+**Setup.** A singular isothermal ellipsoid with external shear, fitted to
+image positions found by ray shooting through a known model — so the exact
+answer is known and any failure is the fit's, not the data's.
+
+**Result: exact constraints.** Given 17 images of one source spanning 245°,
+the fit reaches the true model: θ_E 14.00 for a true 14.00, axis ratio 0.702
+for a true 0.700, position angle 35.0 for a true 35.0, shear 0.036 for a true
+0.036. Its source-plane scatter is 0.0374 px against the true model's own
+0.0377, and the image-plane residual is 0.12 px.
+
+Dropping the shear from that same fit pulls the axis ratio to 0.649 — the
+ellipsoid flattening itself to reproduce a tidal stretch it is not allowed to
+name. That is the measured reason external shear is in the model.
+
+Getting there required fixing the optimiser rather than the physics. The
+Nelder–Mead simplex was being built by perturbing each parameter by a fixed
+*fraction* — which is zero for any parameter starting at zero, and both shear
+components and the position angle start at zero. Three of the search
+directions were therefore degenerate and the fit stopped short of the true
+minimum on constraints whose exact solution was known, returning an axis ratio
+of exactly 1.000 every time. Supplying the initial simplex explicitly, plus
+restarts from four position angles because the objective is multimodal in it,
+recovers the true model.
+
+**Result: why the shear is gated.** The same true model (q = 0.70, shear =
+0.036), fitted to images spanning different angles around the lens:
+
+| Azimuthal span | Fitted q, no noise | Fitted q, 1 px noise | Fitted shear |
+| --- | --- | --- | --- |
+| 267° | 0.89 | 0.79 | 0.04–0.09 |
+| 255° | 0.76 | 0.73 | 0.02–0.10 |
+| 237° | 0.74 | 0.88 | 0.03–0.07 |
+| 223° | 0.69 | 0.61 | 0.05–0.10 |
+| 163° *(shear free)* | **0.48** | **0.25** | **0.11–0.43** |
+| 158° *(shear free)* | **0.22** | **0.20** | **0.41–0.43** |
+| 145° *(shear free)* | **0.24** | **0.22** | **0.36–0.50** |
+
+Below about 165° the fit reports a nearly round lens in a violent tidal field —
+the ellipsoid's own flattening counted twice. Above about 220° it is right.
+Nothing in this geometry lands between, so the gate sits at **200°**, in the
+middle of the untested gap rather than at the edge of the band that worked.
+With the gate in place and the shear held at zero below it, every span in the
+table returns an axis ratio between 0.59 and 0.82 for a true 0.70.
+
+**Result: when a large shear is believed.** Removing a *spurious* shear costs
+a factor 1.0–1.7 in source-plane scatter; removing a *real* one (true shear
+0.2–0.45) costs a factor 16–30. The fit refits without the shear whenever the
+free value exceeds 0.3 and keeps whichever model the data support, flagging
+either outcome.
+
+**Result: end to end.** Of the four recovered systems above, all four were
+modelled:
+
+| Quantity | Result |
+| --- | --- |
+| Einstein radius | 20 % median fractional error (9 %, 16 %, 24 %, 34 %) |
+| Axis ratio | 0.13 median absolute error, true 0.76–0.97 |
+| Image-plane residual | 3.8 px median |
+| Implied mass | log M_E 12.6–13.1, at an assumed source redshift |
+
+The Einstein radii from the model are less accurate than the 10 % quoted above
+for the arc-fitting radius, and that is expected: the arc fit is handed a
+radius by construction, while the model is fitted to a handful of ridge points
+on one or two faint arcs and is solving for five parameters at once.
+
+**Sanity check on the masses.** θ_E = 1.2″ with the deflector at z = 0.4 and
+the source at z = 2.0 gives 2.8 × 10¹¹ M☉ inside an Einstein radius of 6.4 kpc,
+implying 244 km/s — squarely the SLACS regime for an early-type galaxy lens.
+
+Tests: `tests/test_lens_model.py`.
 
 ## Photometric redshifts
 
