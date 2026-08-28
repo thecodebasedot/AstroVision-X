@@ -806,6 +806,80 @@ outlier score measures dissimilarity from this field, not physical novelty, and
 instrumental artefacts score highly too — which is why the recommended first
 step is always visual inspection.
 
+## Training on data from somewhere else
+
+Every model in this package has been trained on simulated fields, where the
+label is exact, the stamp is clean, and the instrument is the one the model
+will be used on. Real training data is none of those things, and the
+differences are not details.
+
+**Labels are votes.** A crowd-sourced catalogue gives the fraction of
+volunteers who chose each answer. A stamp 98 % of them agreed on is not the
+same training example as one they split 51/49 over, and treating them alike
+teaches the model the disagreement. The winning fraction becomes a per-sample
+weight, and anything below 60 % agreement is dropped — not as a hard example
+to learn from, but as one the labellers themselves did not settle.
+
+**Stamps have holes.** Chip gaps, saturated columns and masked cosmic rays
+arrive as NaNs, and a NaN reaching an optimiser turns every weight downstream
+into a NaN on the first backward pass, with the failure surfacing far from its
+cause. Bad pixels are therefore handled at the door: a few are filled with the
+local median — not zero, because a zero-filled hole is a dark patch and a
+network will learn dark patches as a feature of whichever class had the most
+chip gaps — and a stamp more than a quarter unusable is refused.
+
+**Units are arbitrary.** Counts, nanomaggies, calibrated flux, varying between
+files. The per-stamp asinh stretch already removes this, which is worth
+stating for what it implies: the input is scale-free, so what a domain gap
+consists of is optics and noise, not units.
+
+**The instrument is different**, and this is the one that costs accuracy.
+
+### What a change of instrument costs
+
+The useful question is not whether a model transports between telescopes — it
+does not — but how many labelled examples from the new one it takes to
+recover. That question has an answer, and measuring it takes three legs, of
+which the third is the one usually left out:
+
+1. train on the source instrument, test on it — the number people quote;
+2. train on the source, test on the target — the gap;
+3. fine-tune on *N* target examples, **and train from scratch on the same
+   *N***, and compare.
+
+Without the third leg, "fine-tuning reached 84 %" is unfalsifiable: those *N*
+examples alone might have got there, and the pretraining contributed nothing.
+
+Measured between two simulated instruments — a sharp Moffat PSF over a quiet
+background, against a blurrier Gaussian one on a sky three times brighter —
+the gap is 23 points of balanced accuracy, and fine-tuning the head on 25
+target labels recovers about half of it. The full numbers, with their spread,
+are in `docs/validation.md`.
+
+Two findings there are worth carrying here because both contradicted a
+reasonable guess.
+
+**The frozen backbone is not the limiting factor**, even at 200 labels. The
+obvious expectation is that head-only fine-tuning saturates and unfreezing the
+network does better once there is enough data. Measured, unfreezing is *worse*
+at every budget from 50 labels up — 0.65 against 0.84 at 100 — because a few
+hundred examples cannot retrain a whole network without destroying the
+features the source domain paid for.
+
+**A single draw is not a measurement.** One draw of 25 target labels scored
+0.837, which would have supported a claim that 25 labels recover 90 % of the
+source score. Five draws of the same size gave 0.795 ± 0.059, spanning 0.726
+to 0.866 — and three of the five do not reach that threshold. At small
+budgets the spread is the finding, so the study repeats every budget and
+reports the spread rather than the first number it saw.
+
+**No real survey data was used.** Nothing outside the package registries was
+reachable from the environment this was written in, so the loaders are
+exercised against files written in the same formats rather than against
+archive files, and the domain shift is measured between two simulated
+instruments. What that buys is the *method* and the shape of the answer; what
+it does not buy is a number for any particular survey.
+
 ## What none of this can do
 
 Nothing here confirms anything. A transient candidate needs an independent

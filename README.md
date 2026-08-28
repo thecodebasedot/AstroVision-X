@@ -203,6 +203,7 @@ for source in analysis.catalog:
 | Strong lensing | Tangential arcs at a shared radius; radial scan for full rings |
 | Lens mass models | Isothermal ellipsoid + external shear fitted to arc positions, Einstein mass |
 | Spectroscopy | Long-slit extraction, arc calibration, cross-correlation redshifts, line fitting, BPT and supernova typing |
+| Transfer learning | Loaders for survey cutouts and alert stamps; measured cost of an instrument change and what it takes to recover |
 | Populations | Number counts, completeness turnover, Landy–Szalay clustering |
 
 ---
@@ -242,6 +243,8 @@ bad columns. They are *not* claims about real survey data.
 | Lens model on exact constraints | θ_E, axis ratio, angle and shear all recovered |
 | Lens model on detected arcs | θ_E 20 % median error, axis ratio 0.13 |
 | CNN stamp classification | 85 % on a 266-stamp training set |
+| Cost of an instrument change | 0.92 → 0.70 balanced accuracy, a 23-point drop |
+| Recovery from 25 target labels | 0.795 ± 0.059, against 0.28 trained from scratch |
 | LSTM light-curve classification | 92 % over six variability classes |
 
 Known limits, stated plainly: nebula and star-cluster classification is weak
@@ -252,6 +255,14 @@ because they count photon and read noise but not sky estimation, blending or
 PSF-matching residuals; and Sérsic fits are effectively degenerate in
 `n` against `r_eff`, which is why they carry a correlation and a flag rather
 than a bare index.
+
+The transfer numbers deserve their caveat stated first: **no real survey data
+was used anywhere in this project.** Nothing outside the package registries
+was reachable from the environment it was built in, so the loaders for survey
+cutouts and alert stamps are exercised against files written in those formats,
+and the cost of changing instrument is measured between two *simulated* ones.
+The method and the shape of the answer are real; a number for SDSS or ZTF is
+not, and would need the data to obtain.
 
 Two spectroscopic limits belong in the same paragraph as the numbers above.
 Below signal-to-noise about 5 per pixel the redshift reliability flag stops

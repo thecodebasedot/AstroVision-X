@@ -261,6 +261,42 @@ arc = simulator.arc_frame()
 quick = simulator.extracted(supernova_spectrum("Ia", 0.0), redshift=0.02, snr=20)
 ```
 
+## Training data and transfer
+
+```python
+from astrovision.ml import (class_balance_report, domain_study, evaluate,
+                            fine_tune, freeze_backbone, load_fits_cutouts,
+                            read_label_table, split_dataset, stamps_from_fields)
+
+# Real survey cutouts: one FITS file per object, plus a table of labels
+labels = read_label_table("labels.csv", id_column="objid",
+                          vote_columns={"galaxy": "p_spiral", "star": "p_star"})
+dataset = load_fits_cutouts("cutouts/", labels)
+dataset.report()                     # what loaded, what was dropped and why
+class_balance_report(dataset)        # the majority-class baseline to beat
+
+# Or from simulated fields, one instrument per config factory
+train = stamps_from_fields(lambda seed: SkyConfig(seed=seed, seeing_fwhm=3.0),
+                           range(400, 420))
+train, validation, test = split_dataset(train, (0.7, 0.15, 0.15), by_group="seed")
+
+# Adapt a trained model to a new instrument
+freeze_backbone(classifier)          # returns the parameter counts, so check them
+result = fine_tune(classifier, target_train, target_validation, epochs=60)
+evaluate(classifier, target_test)    # accuracy, per-class recall, confusion
+
+study = domain_study(train_source_model, source_test, target_pool, target_test,
+                     label_budgets=(12, 25, 50, 100), repeats=3)
+study.summary()                      # gap, and the labels needed to close it
+```
+
+`split_dataset(..., by_group="seed")` keeps stamps from one field together:
+they share its noise, PSF and background, so splitting them across train and
+test measures memorisation. `domain_study` draws each budget `repeats` times
+because a single draw of 25 labels varied by 0.14 in balanced accuracy here,
+and it always trains from scratch on the same labels for comparison — without
+that, a fine-tuning score says nothing about whether the pretraining helped.
+
 ## Reports
 
 ```python
