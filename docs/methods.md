@@ -806,6 +806,48 @@ outlier score measures dissimilarity from this field, not physical novelty, and
 instrumental artefacts score highly too — which is why the recommended first
 step is always visual inspection.
 
+## Learning without labels
+
+Labels are the scarce resource. A survey produces millions of cutouts a night
+and a few thousand will ever be looked at by a person, so a representation
+learned without labels and adapted with a handful of them is worth more than a
+better classifier trained on the labels that exist.
+
+The method is contrastive: two augmented views of one stamp are pulled
+together in the embedding while views of different stamps are pushed apart. No
+label enters anywhere — the `fit` method takes stamps and nothing else, so a
+run cannot quietly have used them. What the network learns is whatever
+survives the augmentations, which makes the augmentation list the whole design
+rather than a detail.
+
+The rule for including one: it must change the *observation* and leave the
+*object* alone — what a telescope could have done differently on another night
+to the same source. Rotations and reflections are exact sky symmetries;
+translation, added noise, mild extra PSF blur and brightness scaling are all
+things a different exposure would have produced. Blur has to stay mild, since
+blurring a star far enough makes it a galaxy, which is teaching the network
+something false.
+
+Measured over three seeds per policy, the photometric augmentations carry most
+of the value: dropping everything except rotation and reflection costs 14
+points of balanced accuracy, and dropping the PSF blur alone costs 3.5.
+
+**One prediction of mine was wrong and the measurement says so.** The standard
+SimCLR recipe uses a random resized crop, which teaches the network that scale
+does not matter — and in a survey cutout angular size is exactly what
+separates an unresolved star from a resolved galaxy. That argument is clean,
+and it did not survive contact with the data: adding resized crops left star
+and galaxy recall unchanged (0.784 ± 0.016 against 0.790 ± 0.012) and slightly
+*improved* overall accuracy. The default is still no resized crop, on the
+physical argument rather than on a measured advantage, and the switch is kept
+so the question can be reopened at a larger stamp size or crop range. Deleting
+the experiment would have been easier and would have left the docstring's
+confident claim standing.
+
+What self-supervision buys is measured the same way transfer was: against
+training from scratch on the same labels, because "the probe reached 80 %" is
+only interesting if 80 % was not available without the pretraining.
+
 ## Explaining a score
 
 An astronomer will not act on a number a black box produced, and is right not

@@ -205,6 +205,7 @@ for source in analysis.catalog:
 | Spectroscopy | Long-slit extraction, arc calibration, cross-correlation redshifts, line fitting, BPT and supernova typing |
 | Transfer learning | Loaders for survey cutouts and alert stamps; measured cost of an instrument change and what it takes to recover |
 | Explainability | Occlusion and Grad-CAM saliency, Shapley attributions, nearest-neighbour retrieval — each checked against the model's own behaviour |
+| Self-supervision | Contrastive pretraining on unlabelled cutouts, with astronomy-appropriate augmentations |
 | Populations | Number counts, completeness turnover, Landy–Szalay clustering |
 
 ---
@@ -249,6 +250,7 @@ bad columns. They are *not* claims about real survey data.
 | Saliency faithfulness (occlusion) | beats chance on 37/40 stamps; Grad-CAM on 21/40 |
 | Shapley attributions | informative features 100× above noise features |
 | Anomaly retrieval | 86 % same-class neighbours against a 35 % chance rate |
+| Self-supervised probe, 100 labels | 0.764 ± 0.008 against 0.655 ± 0.146 from scratch |
 | LSTM light-curve classification | 92 % over six variability classes |
 
 Known limits, stated plainly: nebula and star-cluster classification is weak

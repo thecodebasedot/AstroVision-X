@@ -10,6 +10,17 @@ from .calibration import (
     fit_calibrator,
     reliability_curve,
 )
+from .selfsupervised import (
+    TEMPERATURE,
+    AugmentationPolicy,
+    ContrastiveEncoder,
+    PretrainResult,
+    anomaly_ranking_quality,
+    augment,
+    label_efficiency,
+    linear_probe,
+    nt_xent_loss,
+)
 from .explain import (
     Attribution,
     Neighbours,
@@ -84,6 +95,9 @@ __all__ = [
     "cam_matches_head_weights", "deletion_curve",
     "Attribution", "shapley_values", "explain_prediction",
     "Neighbours", "retrieve_similar", "retrieval_purity", "explain_catalog",
+    "ContrastiveEncoder", "AugmentationPolicy", "PretrainResult", "augment",
+    "linear_probe", "anomaly_ranking_quality", "label_efficiency",
+    "nt_xent_loss", "TEMPERATURE",
     "FEATURE_NAMES", "source_features", "catalog_features", "catalog_embeddings",
     "combine_features", "cutout_descriptor", "feature_report",
 ]

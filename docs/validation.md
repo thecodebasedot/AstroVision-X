@@ -778,6 +778,70 @@ The ViT result is reported as measured. On a few hundred stamps a
 convolutional inductive bias wins, and that is worth knowing before choosing a
 backbone.
 
+## Learning without labels
+
+**Setup.** 764 unlabelled stamps for contrastive pretraining, 210 labelled for
+probing, 201 held out, four classes, a 32-dimensional embedding. Balanced
+accuracy throughout. Every augmentation policy is run with three seeds,
+because a single contrastive run varies by more than the differences being
+compared.
+
+**What the augmentations are worth:**
+
+| Policy | Balanced accuracy | Star/galaxy recall |
+| --- | --- | --- |
+| Rotation and reflection only | 0.611 ± 0.041 | 0.737 ± 0.009 |
+| No PSF blur | 0.720 ± 0.015 | 0.732 ± 0.034 |
+| **Default (rotate, flip, shift, noise, blur, brightness)** | **0.755 ± 0.015** | **0.790 ± 0.012** |
+| Default plus resized crop | 0.776 ± 0.014 | 0.784 ± 0.016 |
+
+The photometric augmentations carry most of the value: keeping only the exact
+sky symmetries costs 14 points, and dropping the PSF blur alone costs 3.5.
+
+**The resized-crop prediction was wrong.** The argument for excluding it is
+clean — a scale-changing crop destroys angular size, and angular size is what
+separates an unresolved star from a resolved galaxy. Measured, it left
+star/galaxy recall unchanged and slightly improved the overall score. The
+default remains no crop on the physical argument, not on a measured
+advantage, and the switch stays so the question can be reopened with larger
+stamps or a wider crop range.
+
+**What the unlabelled data buys**, linear probe on frozen pretrained features
+against a network trained from scratch on the same labels:
+
+| Target labels | Probe on pretrained features | From scratch | Advantage |
+| --- | --- | --- | --- |
+| 10 | 0.471 ± 0.065 | 0.298 ± 0.052 | **+0.173** |
+| 25 | 0.605 ± 0.020 | 0.538 ± 0.104 | +0.067 |
+| 50 | 0.682 ± 0.053 | 0.598 ± 0.081 | +0.084 |
+| 100 | 0.764 ± 0.008 | 0.655 ± 0.146 | +0.109 |
+
+The pretrained probe wins at every budget, and the **spread** is the part
+worth noticing: at 100 labels it varies by ±0.008 across draws against ±0.146
+from scratch. Pretrained features do not merely score better, they score
+*reproducibly* — which is what matters when a real run happens once.
+
+For reference, a probe on the **supervised** embedding trained on all 210
+labels reaches 0.855, so self-supervision gets most of the way there from a
+fraction of the labels and does not replace them.
+
+**Anomaly ranking**, k-nearest-neighbour distance as the score, on a field
+with 49 injected anomalies among 258 objects:
+
+| Embedding | ROC area |
+| --- | --- |
+| Self-supervised | **0.648** |
+| Supervised on four classes | 0.602 |
+
+The self-supervised embedding ranks oddities slightly better, which is what
+the argument predicts — a supervised embedding is trained to discard whatever
+does not separate its four classes, and an anomaly is by definition outside
+them. But 0.65 is a weak detector, and the honest reading is that neither
+embedding alone finds anomalies well; this measures representations, not the
+anomaly engine, which combines three detectors.
+
+Tests: `tests/test_selfsupervised.py`.
+
 ## Explanations
 
 **Setup.** The CNN stamp classifier trained on simulated fields, 40 test
