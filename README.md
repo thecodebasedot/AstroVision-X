@@ -204,6 +204,7 @@ for source in analysis.catalog:
 | Lens mass models | Isothermal ellipsoid + external shear fitted to arc positions, Einstein mass |
 | Spectroscopy | Long-slit extraction, arc calibration, cross-correlation redshifts, line fitting, BPT and supernova typing |
 | Transfer learning | Loaders for survey cutouts and alert stamps; measured cost of an instrument change and what it takes to recover |
+| Explainability | Occlusion and Grad-CAM saliency, Shapley attributions, nearest-neighbour retrieval — each checked against the model's own behaviour |
 | Populations | Number counts, completeness turnover, Landy–Szalay clustering |
 
 ---
@@ -245,6 +246,9 @@ bad columns. They are *not* claims about real survey data.
 | CNN stamp classification | 85 % on a 266-stamp training set |
 | Cost of an instrument change | 0.92 → 0.70 balanced accuracy, a 23-point drop |
 | Recovery from 25 target labels | 0.795 ± 0.059, against 0.28 trained from scratch |
+| Saliency faithfulness (occlusion) | beats chance on 37/40 stamps; Grad-CAM on 21/40 |
+| Shapley attributions | informative features 100× above noise features |
+| Anomaly retrieval | 86 % same-class neighbours against a 35 % chance rate |
 | LSTM light-curve classification | 92 % over six variability classes |
 
 Known limits, stated plainly: nebula and star-cluster classification is weak

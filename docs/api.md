@@ -261,6 +261,43 @@ arc = simulator.arc_frame()
 quick = simulator.extracted(supernova_spectrum("Ia", 0.0), redshift=0.02, snr=20)
 ```
 
+## Explaining a score
+
+```python
+from astrovision.ml import (deletion_curve, explain_catalog, explain_prediction,
+                            explain_stamp, retrieval_purity, retrieve_similar)
+
+# Which pixels the class score depended on
+saliency = explain_stamp(classifier, stamp)          # occlusion, by default
+saliency.heatmap, saliency.predicted_class, saliency.native_shape
+explain_stamp(classifier, stamp, method="grad-cam")  # faster, measurably worse
+
+# Is the map describing the model, or just looking convincing?
+check = deletion_curve(classifier, stamp, saliency.heatmap)
+check["advantage"], check["beats_chance"]            # positive means it earned it
+
+# Which measured features moved this prediction
+attribution = explain_prediction(gbdt, x, background=training_X,
+                                 feature_names=names, n_samples=200)
+attribution.explain()                                # a readable sentence
+attribution.top(3), attribution.errors, attribution.converged
+attribution.additivity_error()                       # must be small
+
+# What an unusual object resembles
+found = retrieve_similar(embeddings, index, n=3, labels=labels)
+found.explain()                                      # "nearest ... 3.4x typical"
+retrieval_purity(embeddings, labels)["lift"]         # > 1 means better than chance
+explain_catalog(catalog, top=10)                     # attaches to the oddest sources
+```
+
+`explain_stamp` defaults to occlusion because that is what measured better:
+on this classifier Grad-CAM beat chance on 21 of 40 stamps against occlusion's
+37, and put no more of its mass on the object than a uniform map would. The
+`deletion_curve` fill defaults to background noise rather than a constant —
+a constant narrows the stamp's noise distribution, which the asinh stretch
+renormalises against, and flatters every map. Both numbers are in
+`docs/validation.md`.
+
 ## Training data and transfer
 
 ```python

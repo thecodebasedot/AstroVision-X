@@ -806,6 +806,74 @@ outlier score measures dissimilarity from this field, not physical novelty, and
 instrumental artefacts score highly too — which is why the recommended first
 step is always visual inspection.
 
+## Explaining a score
+
+An astronomer will not act on a number a black box produced, and is right not
+to. Every model here that scores an object has a matching explanation: the
+stamp classifier gets a saliency map, the boosted trees get Shapley values,
+and the anomaly ranking gets retrieval — "this looks like these three, and
+here is how far from them it is".
+
+Producing any of those is easy. Knowing whether they are *true* is the work,
+because a saliency map is an image and an image is convincing whether or not
+it describes the model. So each explanation is checked against the model's own
+behaviour:
+
+* a saliency map by **deletion** — erase the pixels it calls important and the
+  class score must fall further than erasing the same number of random ones;
+* Shapley values by **additivity** — they must sum, with the base rate, to the
+  model's actual output;
+* retrieval by **purity** — the neighbours must share the query's class more
+  often than chance, where chance is the probability two random objects match,
+  not one over the class count.
+
+Three things those checks turned up.
+
+**The deletion test was measuring itself.** Erasing pixels by setting them to
+a constant — the obvious choice, and the usual one — narrows the stamp's noise
+distribution, and the classifier's asinh stretch computes its softening from
+exactly that distribution. A map that ranks background pixels highly therefore
+changes the *stretch* rather than removing information, and scores an
+advantage it has not earned. On the same maps, a constant fill reported a mean
+advantage of 0.109 with 32 of 40 stamps beating chance; filling with noise
+drawn from the stamp's own background gave 0.044 and 25 of 40. More than half
+the effect was the test. The noise-preserving fill is now the default.
+
+**Grad-CAM is nearly useless on this architecture, and the measurement says so
+plainly.** It computes correctly — with global average pooling into a single
+linear head the gradient weights equal the head weights exactly, and that
+identity is checked to 1 part in 10¹⁰. But under the corrected deletion test
+it beat chance on 21 of 40 stamps with an advantage of 0.03, its correlation
+with where the object's light actually is came out at −0.04, and it placed
+0.15 of its mass on the central sixteenth of the stamp where a *uniform* map
+would place 0.11. The cause is structural: a 48-pixel stamp leaves a 12 × 12
+map, one to four cells of which cover a compact source, and global average
+pooling means the decision genuinely draws on the whole frame.
+
+**Occlusion works, so it is the default.** Covering the image a patch at a
+time and measuring the drop gives an advantage of 0.23, beats chance on 37 of
+40, correlates 0.30 with the light and puts 0.60 of its mass on the object.
+Part of that gap is expected — occlusion optimises the quantity the deletion
+test measures — but the correlation and the concentration are not what it
+optimises and it wins those too. It costs one forward pass per patch, which is
+the honest trade: Grad-CAM remains available for when speed matters more than
+fidelity.
+
+Shapley values are estimated by permutation sampling rather than computed
+exactly, because exact enumeration is factorial in the feature count. An
+estimate without an error bar is a number pretending to be a fact, so the
+standard error is returned per feature and a run that has not converged says
+so. On a model with two informative features among six carriers of nothing,
+both informative ones land in the top two attributions for every object
+tested, and the noise features come out two orders of magnitude smaller.
+
+Retrieval is reported against the *typical* separation in the same field,
+because a distance alone means nothing — the same number is close in one
+embedding and remote in another. The learned embedding retrieves same-class
+neighbours 86 % of the time against a 35 % chance rate; comparing raw pixels
+manages 59 %, which is what says the embedding is contributing rather than the
+pixels.
+
 ## Training on data from somewhere else
 
 Every model in this package has been trained on simulated fields, where the

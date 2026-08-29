@@ -10,6 +10,21 @@ from .calibration import (
     fit_calibrator,
     reliability_curve,
 )
+from .explain import (
+    Attribution,
+    Neighbours,
+    SaliencyMap,
+    cam_matches_head_weights,
+    deletion_curve,
+    explain_catalog,
+    explain_prediction,
+    explain_stamp,
+    grad_cam,
+    occlusion_map,
+    retrieval_purity,
+    retrieve_similar,
+    shapley_values,
+)
 from .datasets import (
     MAX_BAD_FRACTION,
     MIN_VOTE_AGREEMENT,
@@ -65,6 +80,10 @@ __all__ = [
     "MAX_BAD_FRACTION", "MIN_VOTE_AGREEMENT",
     "freeze_backbone", "unfreeze", "replace_head", "fine_tune", "evaluate",
     "FineTuneResult", "DomainStudy", "domain_study",
+    "SaliencyMap", "grad_cam", "occlusion_map", "explain_stamp",
+    "cam_matches_head_weights", "deletion_curve",
+    "Attribution", "shapley_values", "explain_prediction",
+    "Neighbours", "retrieve_similar", "retrieval_purity", "explain_catalog",
     "FEATURE_NAMES", "source_features", "catalog_features", "catalog_embeddings",
     "combine_features", "cutout_descriptor", "feature_report",
 ]

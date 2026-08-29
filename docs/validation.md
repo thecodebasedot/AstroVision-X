@@ -778,6 +778,75 @@ The ViT result is reported as measured. On a few hundred stamps a
 convolutional inductive bias wins, and that is worth knowing before choosing a
 backbone.
 
+## Explanations
+
+**Setup.** The CNN stamp classifier trained on simulated fields, 40 test
+stamps, four classes. Every explanation is scored against the model's own
+behaviour rather than against how it looks.
+
+**Saliency maps.** The deletion test erases the pixels a map calls important
+and compares the class-score drop against erasing the same number at random.
+The area between the two curves is the advantage; positive means the map found
+what mattered.
+
+| Method | Deletion advantage | Beats chance | Correlation with the light | Mass on the object |
+| --- | --- | --- | --- | --- |
+| Grad-CAM | +0.034 | 21/40 | −0.04 | 0.15 |
+| Occlusion | **+0.234** | **37/40** | **+0.30** | **0.60** |
+
+A uniform map would put 0.11 of its mass on the central sixteenth of the
+stamp, where the object is by construction. **Grad-CAM at 0.15 is barely
+distinguishable from uniform.** It is computed correctly — the gradient
+weights equal the head weights to 1.2 × 10⁻¹⁰, which is an exact identity for
+this architecture — so the failure is not a bug but the method's resolution: a
+12 × 12 map on a 48-pixel stamp, one to four cells of which cover a compact
+source.
+
+Occlusion is therefore the default, with Grad-CAM kept for speed and
+documented as the weaker map.
+
+**The deletion test itself was wrong first.** Filling erased pixels with a
+constant narrows the stamp's noise distribution, which the classifier's asinh
+stretch renormalises against:
+
+| Fill | Mean advantage | Beats chance |
+| --- | --- | --- |
+| Constant (the usual choice) | +0.109 | 32/40 |
+| Noise from the stamp's own background | **+0.044** | **25/40** |
+
+More than half the apparent effect was an artefact of the ablation. The
+noise-preserving fill is the default, and the constant remains available so
+the gap can be reproduced.
+
+**Shapley attributions**, on a model with two informative features and six
+that carry nothing:
+
+| Quantity | Result |
+| --- | --- |
+| Both informative features in the top two | 12/12 objects |
+| Mean absolute attribution, informative | 0.269 and 0.140 |
+| Mean absolute attribution, worst noise feature | **0.003** |
+| Additivity residual | 0.005 – 0.010 |
+
+The estimate converges as one over the square root of the draws — max standard
+error 0.049 at 50 permutations, 0.025 at 200, 0.013 at 800 — and `converged`
+reports whether the tolerance was actually reached rather than assuming it.
+
+**Retrieval**, on the classifier's embedding of 104 test stamps:
+
+| Neighbours | Purity | Chance | Lift |
+| --- | --- | --- | --- |
+| 1 | 0.904 | 0.352 | 2.57 |
+| 3 | 0.859 | 0.352 | 2.44 |
+| 5 | 0.863 | 0.352 | 2.45 |
+| 3, raw pixels instead of the embedding | 0.587 | 0.352 | 1.67 |
+
+The raw-pixel row is the control that matters: the learned embedding retrieves
+better than comparing pixels does, so the explanation is drawing on what the
+model learned rather than on the images alone.
+
+Tests: `tests/test_explain.py`.
+
 ## Moving a model to another instrument
 
 **Setup.** Two simulated instruments, differing in everything that changes how
