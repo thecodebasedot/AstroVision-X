@@ -206,6 +206,7 @@ for source in analysis.catalog:
 | Transfer learning | Loaders for survey cutouts and alert stamps; measured cost of an instrument change and what it takes to recover |
 | Explainability | Occlusion and Grad-CAM saliency, Shapley attributions, nearest-neighbour retrieval — each checked against the model's own behaviour |
 | Self-supervision | Contrastive pretraining on unlabelled cutouts, with astronomy-appropriate augmentations |
+| Human-in-the-loop | Reviewer verdicts recorded as labels, model/reviewer agreement tracked, retraining loop |
 | Populations | Number counts, completeness turnover, Landy–Szalay clustering |
 
 ---
@@ -251,6 +252,7 @@ bad columns. They are *not* claims about real survey data.
 | Shapley attributions | informative features 100× above noise features |
 | Anomaly retrieval | 86 % same-class neighbours against a 35 % chance rate |
 | Self-supervised probe, 100 labels | 0.764 ± 0.008 against 0.655 ± 0.146 from scratch |
+| Active-learning selection | random beat uncertainty sampling at 3 of 4 budgets |
 | LSTM light-curve classification | 92 % over six variability classes |
 
 Known limits, stated plainly: nebula and star-cluster classification is weak

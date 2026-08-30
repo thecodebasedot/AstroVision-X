@@ -806,6 +806,62 @@ outlier score measures dissimilarity from this field, not physical novelty, and
 instrumental artefacts score highly too — which is why the recommended first
 step is always visual inspection.
 
+## Feeding an astronomer's decisions back in
+
+Everything here produces a recommendation; a person then decides. That
+decision is the most expensive data this project will ever have — an expert's
+judgement on a specific object — and it used to be discarded the moment the
+screen closed. It is now recorded, fed back as a label, and used to measure
+whether choosing *which* objects to show makes the labelling effort go
+further.
+
+**A model's verdict is not a label.** The pipeline's `Verdict` is what it
+recommended; a `HumanVerdict` is what a person concluded, and they are
+separate types deliberately. Feeding the first back in as training data is
+self-training: the model's own errors return as truth and the next model is
+more confident about them. A verdict without a named reviewer is refused for
+that reason, and "I am not sure" is kept as an answer rather than converted
+into a class.
+
+The log is append-only, because a review is a historical fact — an astronomer
+looked at this object on this date and concluded this. When two reviewers
+disagree, that is surfaced rather than resolved by majority: an object experts
+split on is either genuinely ambiguous or badly presented, and both are more
+useful to know than a vote. The most valuable diagnostic that falls out is the
+model's agreement with the reviewers, measured on real decisions rather than a
+held-out split — and specifically the objects the model called at over 0.9
+confidence and a reviewer overruled, which is where a calibration problem
+shows up first.
+
+### Choosing what to show: a negative result
+
+Uncertainty sampling — show the astronomer whatever the model is least sure
+about — is the textbook answer, and on this problem it does not work. Over six
+repeats at budgets from 20 to 100 labels it lost to plain random selection at
+three of the four budgets and won at one, with overlapping spreads throughout.
+
+The class composition explains it. The decision boundary is crowded with faint
+*stars*, which are the majority class and individually uninformative, so
+uncertainty sampling spent 58 of its 100 labels on them against random's 42,
+while galaxies fell from 32 to 22. It bought more of what there was already
+plenty of.
+
+Quotas per predicted class were the obvious fix and also failed, for a reason
+worth keeping: the quota is on what the model *predicts*, and early in the
+loop the model predicts the majority class for nearly everything, so the quota
+rebalances nothing.
+
+The default is therefore random selection — unbiased about the distribution
+the model will actually meet, simpler, and no worse than anything tried
+against it. The other strategies remain with their numbers attached, because
+this is one problem at one range of budgets, and a harder one with a rarer
+target class is exactly where uncertainty sampling should be tried again.
+
+One caveat belongs on all of it: the loop is measured with the pool's true
+labels standing in for the astronomer. That oracle is instant, always right
+and always decisive, and a real reviewer is none of those, so these curves are
+the best case for every strategy alike.
+
 ## Learning without labels
 
 Labels are the scarce resource. A survey produces millions of cutouts a night

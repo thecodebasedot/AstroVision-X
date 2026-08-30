@@ -261,6 +261,35 @@ arc = simulator.arc_frame()
 quick = simulator.extracted(supernova_spectrum("Ia", 0.0), redshift=0.02, snr=20)
 ```
 
+## Human verdicts and active learning
+
+```python
+from astrovision.ml import (HumanVerdict, VerdictLog, compare_strategies,
+                            review_queue, select_for_review, verdicts_to_labels)
+
+queue = review_queue(catalog, probabilities, classes, n=20)   # random by default
+# each entry carries model_label, model_confidence, runner_up, uncertainty
+
+log = VerdictLog()
+log.add(HumanVerdict(source_id=41, label="galaxy", reviewer="a.astronomer",
+                     model_label="star", model_confidence=0.94,
+                     note="faint disc visible"))
+log.save("verdicts.json")
+
+log.agreement_with_model()["confidently_wrong"]   # calibration problems, first
+log.disagreements()                               # objects experts split on
+training = verdicts_to_labels(log, dataset)       # confident verdicts only
+
+compare_strategies(pool, test, classes,
+                   strategies=("random", "uncertainty", "balanced"))
+```
+
+A verdict without a named reviewer is refused: an unattributed decision cannot
+be told apart from the model's own output, and training on that is
+self-training. `select_for_review` defaults to `random` because that is what
+measured best — uncertainty sampling lost at three of four budgets and spent
+its labels on the majority class. See `docs/validation.md`.
+
 ## Learning from unlabelled cutouts
 
 ```python

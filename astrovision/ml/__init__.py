@@ -10,6 +10,17 @@ from .calibration import (
     fit_calibrator,
     reliability_curve,
 )
+from .active import (
+    ActiveLearningRun,
+    HumanVerdict,
+    VerdictLog,
+    compare_strategies,
+    review_queue,
+    run_active_learning,
+    select_for_review,
+    uncertainty_scores,
+    verdicts_to_labels,
+)
 from .selfsupervised import (
     TEMPERATURE,
     AugmentationPolicy,
@@ -98,6 +109,9 @@ __all__ = [
     "ContrastiveEncoder", "AugmentationPolicy", "PretrainResult", "augment",
     "linear_probe", "anomaly_ranking_quality", "label_efficiency",
     "nt_xent_loss", "TEMPERATURE",
+    "HumanVerdict", "VerdictLog", "verdicts_to_labels", "uncertainty_scores",
+    "select_for_review", "review_queue", "run_active_learning",
+    "compare_strategies", "ActiveLearningRun",
     "FEATURE_NAMES", "source_features", "catalog_features", "catalog_embeddings",
     "combine_features", "cutout_descriptor", "feature_report",
 ]

@@ -778,6 +778,56 @@ The ViT result is reported as measured. On a few hundred stamps a
 convolutional inductive bias wins, and that is worth knowing before choosing a
 backbone.
 
+## Active learning from human verdicts
+
+**Setup.** A pool of 457 labelled stamps standing in for an unreviewed
+queue, 201 held out, four classes. Each run starts from the same
+randomly-drawn, stratified seed set of 20 — no strategy can select from a
+model that does not exist yet — then adds 20 labels per round for four rounds.
+Six repeats. The pool's true labels play the astronomer, which is an
+idealisation worth naming: the oracle is instant, always right and always
+decisive.
+
+**Uncertainty sampling against random selection**, balanced accuracy:
+
+| Labels | Random | Uncertainty | Advantage |
+| --- | --- | --- | --- |
+| 20 (seed set) | 0.422 ± 0.091 | 0.422 ± 0.091 | — |
+| 40 | 0.576 ± 0.103 | 0.554 ± 0.075 | −0.022 |
+| 60 | 0.660 ± 0.025 | 0.589 ± 0.088 | −0.070 |
+| 80 | 0.737 ± 0.059 | 0.658 ± 0.077 | −0.078 |
+| 100 | 0.674 ± 0.149 | 0.720 ± 0.064 | +0.045 |
+
+**Uncertainty sampling lost at three of the four budgets.** An earlier
+three-repeat run, with a different seed and a third strategy, found the same
+pattern (−0.076, −0.010, +0.034, −0.021).
+
+**Why**, from the composition of what got labelled by 100:
+
+| Strategy | Star | Galaxy | Nebula | Cluster |
+| --- | --- | --- | --- | --- |
+| Random | 42 | 32 | 15 | 11 |
+| Uncertainty | **58** | **22** | 12 | 8 |
+| Balanced quotas | 51 | 26 | 13 | 10 |
+
+The decision boundary is crowded with faint stars — numerous, and
+individually uninformative — so uncertainty sampling bought more of the
+majority class and starved the others.
+
+**The obvious fix also failed.** Quotas per predicted class scored +0.044,
+−0.028, −0.055, +0.008 against random, and its composition is barely more
+balanced (51 stars against 42), because the quota is on the class the model
+*predicts* and early on it predicts the majority class for almost everything.
+
+**Diversity-aware selection**, in the three-repeat run, was worst of the three
+(−0.065, −0.040, +0.014, −0.111) with the widest spreads.
+
+So the default is random selection. Nothing tried here beat it, and it has the
+property none of the others do: it samples the distribution the model will
+actually meet.
+
+Tests: `tests/test_active.py`.
+
 ## Learning without labels
 
 **Setup.** 764 unlabelled stamps for contrastive pretraining, 210 labelled for
