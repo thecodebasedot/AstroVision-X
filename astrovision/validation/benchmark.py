@@ -90,21 +90,31 @@ def run_photutils(image: np.ndarray, threshold_sigma: float = 3.5,
     kernel = Gaussian2DKernel(sigma, x_size=int(2 * round(3 * sigma) + 1),
                               y_size=int(2 * round(3 * sigma) + 1))
     convolved = convolve(subtracted, kernel, normalize_kernel=True)
-    segments = detect_sources(convolved, threshold, npixels=int(npixels), mask=mask)
+    # photutils 3.0 renamed npixels/nlevels/xcentroid; support both.
+    try:
+        segments = detect_sources(convolved, threshold, n_pixels=int(npixels), mask=mask)
+    except TypeError:
+        segments = detect_sources(convolved, threshold, npixels=int(npixels), mask=mask)
     notes: List[str] = []
     if segments is None:
         return ToolCatalog("photutils", np.zeros(0), np.zeros(0), np.zeros(0),
                            time.time() - started, 0, ["no sources detected"])
     try:
-        segments = deblend_sources(convolved, segments, npixels=int(npixels),
-                                   nlevels=32, contrast=0.005, progress_bar=False)
+        try:
+            segments = deblend_sources(convolved, segments, n_pixels=int(npixels),
+                                       n_levels=32, contrast=0.005, progress_bar=False)
+        except TypeError:
+            segments = deblend_sources(convolved, segments, npixels=int(npixels),
+                                       nlevels=32, contrast=0.005, progress_bar=False)
     except Exception as error:                          # pragma: no cover
         notes.append(f"deblending failed: {error}")
 
     from photutils.segmentation import SourceCatalog
     catalog = SourceCatalog(subtracted, segments, convolved_data=convolved)
-    x = np.asarray(catalog.xcentroid, dtype=float)
-    y = np.asarray(catalog.ycentroid, dtype=float)
+    x = np.asarray(getattr(catalog, "x_centroid", None)
+                   if hasattr(catalog, "x_centroid") else catalog.xcentroid, dtype=float)
+    y = np.asarray(getattr(catalog, "y_centroid", None)
+                   if hasattr(catalog, "y_centroid") else catalog.ycentroid, dtype=float)
     apertures = CircularAperture(np.column_stack([x, y]), r=float(aperture_radius))
     table = aperture_photometry(subtracted, apertures, mask=mask)
     flux = np.asarray(table["aperture_sum"], dtype=float)

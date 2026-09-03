@@ -223,12 +223,28 @@ class TestTransfer:
     def trained(self):
         from astrovision.ml import StampClassifier
 
+        from astrovision.ml import evaluate
+
         train = stamps_from_fields(source_config, range(400, 410), source="src")
-        classifier = StampClassifier(backbone="cnn", classes=CLASSES, cutout=48,
-                                     width=16, random_state=1)
-        classifier.fit(train.stamps, train.labels, epochs=12, batch_size=32,
-                       verbose=False)
-        return classifier, train
+        # A 16-wide CNN on a few hundred stamps occasionally dies at
+        # initialisation -- every prediction one class, balanced accuracy at
+        # chance -- and which seeds do that differs between PyTorch builds
+        # (2.14 on CPU killed seed 1). The tests here are about transfer,
+        # not about initialisation luck, so a dead start is retried with the
+        # next seed; a model that cannot learn its own training set on three
+        # seeds is a real failure and is reported as one.
+        chance = 1.0 / len(CLASSES)
+        for seed in (1, 2, 3):
+            classifier = StampClassifier(backbone="cnn", classes=CLASSES, cutout=48,
+                                         width=16, random_state=seed)
+            # Twelve epochs was the original budget; measured across seeds it
+            # left the training set at 0.24-0.32 balanced accuracy, i.e. an
+            # untrained model whose "gap" was noise. Twenty-five reaches 0.8.
+            classifier.fit(train.stamps, train.labels, epochs=25, batch_size=32,
+                           verbose=False)
+            if evaluate(classifier, train)["balanced_accuracy"] > chance + 0.2:
+                return classifier, train
+        pytest.fail("the stamp classifier did not learn its training set on three seeds")
 
     def test_freezing_leaves_only_the_head_trainable(self, trained):
         """Worth checking rather than believing: a typo in a layer name
@@ -276,6 +292,7 @@ class TestTransfer:
                                          source="tgt-test")
         on_source = evaluate(classifier, source_test)["balanced_accuracy"]
         on_target = evaluate(classifier, target_test)["balanced_accuracy"]
+        assert on_source > 1.0 / len(CLASSES), "the model did not learn its own instrument"
         assert on_source > on_target
 
     def test_fine_tuning_stops_on_the_validation_split(self, trained):

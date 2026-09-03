@@ -198,7 +198,7 @@ def cross_correlate(observed: np.ndarray, template: np.ndarray
 
 def tonry_davis_r(correlation: np.ndarray, peak_index: int,
                   exclude: int = 30) -> float:
-    """The height of the correlation peak in units of its **antisymmetric** noise.
+    r"""The height of the correlation peak in units of its **antisymmetric** noise.
 
     This is the construction from the original paper, and the antisymmetric
     part is the whole point. A true match produces a symmetric peak: the
