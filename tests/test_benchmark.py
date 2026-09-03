@@ -21,12 +21,12 @@ class TestMatching:
         assert pairs == [(0, 0), (1, 1)]
 
     def test_compare_reports_agreement_and_disagreement(self):
-        theirs = ToolCatalog("tool", np.array([10.0, 50.0]), np.array([10.0, 50.0]),
-                             np.array([100.0, 200.0]), seconds=0.1, n=2)
-        result = compare(np.array([10.1, 50.0, 80.0]), np.array([10.0, 50.1, 80.0]),
-                         np.array([102.0, 196.0, 5.0]), theirs)
+        theirs = ToolCatalog("tool", np.array([10.0, 50.0, 90.0]), np.array([10.0, 50.0, 90.0]),
+                             np.array([100.0, 200.0, 300.0]), seconds=0.1, n=3)
+        result = compare(np.array([10.1, 50.0, 90.0, 80.0]), np.array([10.0, 50.1, 89.9, 80.0]),
+                         np.array([102.0, 196.0, 303.0, 5.0]), theirs)
         assert isinstance(result, BenchmarkResult)
-        assert result.n_matched == 2 and result.only_ours == 1 and result.only_theirs == 0
+        assert result.n_matched == 3 and result.only_ours == 1 and result.only_theirs == 0
         assert result.flux_ratio_median == pytest.approx(1.0, abs=0.03)
         assert result.position_offset_median == pytest.approx(0.1, abs=0.01)
         assert "matched_fraction" in result.to_dict()
