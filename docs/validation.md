@@ -1221,6 +1221,23 @@ was given at configuration, which under pytest is a capture buffer that is
 closed after the first test. The handler now resolves the stream per
 record.
 
+The first run of the full matrix found two more things the single
+environment had hidden. On PyTorch 2.14 (CPU) the transfer test's
+classifier sat at chance on both instruments, and measuring the fixture
+across seeds showed why: twelve training epochs left the training set at
+0.24–0.32 balanced accuracy, so the "gap between instruments" the test had
+been passing on locally was noise. Twenty-five epochs reach 0.82 on the
+training set and a real gap (0.70 on the source instrument, 0.51 on the
+target), a dead initialisation is retried on the next seed, and the test
+first asserts the model learned its own instrument. And photutils 3.0 on
+Python 3.12 recovered 58 of 73 bright objects where 2.x recovered 61, which
+tripped a bound that had been placed on the *other* tool's recall; that
+bound is now 0.7, since their recall is not this package's claim.
+
+The run after those fixes was the first fully green one on this branch:
+ten jobs, 571 to 641 tests each depending on what is installed, every
+skip listed in the summary.
+
 Tests: `tests/test_fallbacks.py`; the matrix is `.github/workflows/ci.yml`.
 
 ## What is not validated
