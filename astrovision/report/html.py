@@ -316,6 +316,31 @@ def render_html(analysis: FieldAnalysis, title: str = "AstroVision-X Field Analy
                      f"<td class='muted'>{_escape(stage.get('message', ''))}</td></tr>")
     parts.append("</tbody></table></div>")
 
+    manifest = report.get("manifest") or {}
+    if manifest:
+        git = manifest.get("git") or {}
+        revision = git.get("revision") or "not a git checkout"
+        if git.get("dirty"):
+            revision += " (uncommitted changes: not reproducible from the revision alone)"
+        dependencies = ", ".join(f"{k} {v}" for k, v in sorted(manifest.get("dependencies", {}).items())
+                                 if v) or "none recorded"
+        rows = [("Reproducibility key", report.get("reproducibility_key")),
+                ("Configuration hash", manifest.get("config_hash")),
+                ("Package version", manifest.get("package_version")),
+                ("Code revision", revision),
+                ("Python / platform", f"{manifest.get('python')} / {manifest.get('platform')}"),
+                ("Numerical dependencies", dependencies),
+                ("Seeds", ", ".join(f"{k}={v}" for k, v in manifest.get("seeds", {}).items()) or "none"),
+                ("Catalog digest", (manifest.get("outputs") or {}).get("catalog_digest"))]
+        for name, checksum in sorted((manifest.get("inputs") or {}).items()):
+            rows.append((f"Input {name}", checksum))
+        parts.append("<h3>Reproducing this run</h3><div class='scroll'><table><tbody>")
+        for label, value in rows:
+            parts.append(f"<tr><th>{_escape(label)}</th><td>{_escape(str(value))}</td></tr>")
+        parts.append("</tbody></table></div>")
+        for note in manifest.get("notes", []):
+            parts.append(f"<p class='muted'>{_escape(note)}</p>")
+
     physical = report.get("physical", {})
     if physical.get("assumptions"):
         parts.append("<h3>Assumptions</h3><ul>" + "".join(
