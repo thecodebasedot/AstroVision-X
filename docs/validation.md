@@ -1038,6 +1038,100 @@ real; a number for any particular survey is not.
 
 Tests: `tests/test_transfer.py`.
 
+## Survey products
+
+The loader is tested on multi-extension files written in the layouts the
+surveys use (`SCI`/`MASK`/`WEIGHT`, `SCI`/`VAR`, a bare primary HDU) and
+checked for each thing it must get right:
+
+| Convention | Check |
+| --- | --- |
+| Weight plane | σ = 1/√w to 1e-6; zero weight masked, not infinite |
+| Data-quality plane | every set bit masked by default; `mask_bits` narrows it |
+| Saturation | pixels above `SATURATE` masked and counted |
+| Pixels in electrons | `BUNIT = electron` gives gain 1, with a note; not applied twice |
+| Missing gain | assumed, and said so in the report |
+| Variance and weight both present | variance wins |
+| `PC` matrix with `CDELT` | rotation honoured; a `CD` matrix still wins when both exist |
+| Survey noise plane through preprocessing | a 25-count σ plane survives as 25 ± 5 %, not the 3-count estimate |
+
+The last two rows are regression tests for defects this work found: the WCS
+reader silently dropped the rotation of every `PC`-form header, and the
+preprocessor overwrote the survey's noise plane with its own estimate so the
+photometer never saw it.
+
+**Not measured:** any archive file. Nothing outside the package registries was
+reachable, so the layouts are those of files written here.
+
+Tests: `tests/test_survey.py`.
+
+## Agreement with photutils and SEP
+
+Three 512² fields (160 stars, 30 galaxies, no cosmic rays or bad columns so
+the comparison is about photometry, not cleaning), the same 3.5 σ threshold,
+the same 5-pixel aperture, catalogs matched by mutual nearest neighbour
+within 2 pixels:
+
+| Seed | Tool | Matched | Position agreement | Flux ratio (ours / theirs) |
+| --- | --- | --- | --- | --- |
+| 1 | photutils | 115 of 123 (93 %) | 0.06 px | 0.998 ± 0.011 |
+| 1 | SEP | 112 of 120 (93 %) | 0.06 px | 0.997 ± 0.008 |
+| 2 | photutils | 131 of 133 (98 %) | 0.08 px | 0.999 ± 0.011 |
+| 2 | SEP | 127 of 128 (99 %) | 0.08 px | 0.997 ± 0.010 |
+| 3 | photutils | 126 of 130 (97 %) | 0.07 px | 0.999 ± 0.014 |
+| 3 | SEP | 124 of 128 (97 %) | 0.06 px | 0.998 ± 0.011 |
+
+Where both codes detect an object they measure the same thing. Against the
+simulator's truth all three codes recover the same flux fraction through a
+5-pixel aperture (0.921–0.928, the aperture's enclosed energy) with the same
+scatter, and recall of objects above 1500 counts is comparable (this package
+0.88–0.94, photutils 0.88–0.92, SEP 0.87–0.92).
+
+The one number that looked bad was the "spurious" count: 36–62 detections
+per field with no truth object above 1500 counts within 2 px, against 2–12
+for the other tools. Traced object by object on seed 1: of 169 detections,
+162 sit on a real object of *some* brightness; 55 of those are faint real
+objects (median 748 counts) below the cut that the other tools do not report
+at this threshold; only about 3 are noise. This package's deblender runs
+deeper than the others' defaults. That is a difference in where the threshold
+bites, not in correctness, and the truth table is what says so.
+
+What the benchmark did find was a performance defect. Timed on the same
+512² fields:
+
+| | Before | After |
+| --- | --- | --- |
+| Photometry, 169 sources | 17.6 s | 1.1 s |
+| One aperture on a 4096² frame | 1817 ms | 0.31 ms |
+| photutils, whole field | 0.2–3.2 s | — |
+| SEP, whole field | 0.0–0.1 s | — |
+
+Every aperture, annulus, growth-curve step and Petrosian ring was a
+full-frame array, about two hundred of them per source. They now work on the
+smallest rectangle containing the aperture; the results agree with the old
+code to 4 × 10⁻¹⁶ relative, checked over circles, ellipses, masks, edge
+positions and NaNs.
+
+Tests: `tests/test_benchmark.py` (skipped where the tools are not installed).
+
+## Reproducibility
+
+The manifest records the configuration hash, package version, git revision
+and dirty flag, Python and platform, the versions of NumPy, SciPy, Astropy,
+scikit-learn, PyTorch, photutils and SEP, the seeds, and a checksum of every
+input. Tests check that:
+
+- the configuration hash ignores key order and sees a changed threshold;
+- the catalog digest ignores source order and last-bit noise (1e-9 px) and
+  sees a millipixel;
+- a manifest round-trips through JSON with the same reproducibility key;
+- `differences()` names a changed seed and a changed configuration;
+- **two runs with the same reproducibility key give the same catalog digest**,
+  through the full detect-and-measure stage;
+- the pipeline attaches the manifest and the catalog digest to every report.
+
+Tests: `tests/test_provenance.py`.
+
 ## What is not validated
 
 - Real instrument signatures: fringing, scattered light, non-linearity,

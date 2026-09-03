@@ -129,6 +129,19 @@ class SimpleWCS:
                 [float(header.get("CD1_1", 0.0)), float(header.get("CD1_2", 0.0))],
                 [float(header.get("CD2_1", 0.0)), float(header.get("CD2_2", 0.0))],
             ])
+        elif "PC1_1" in header or "PC2_2" in header:
+            # The PC + CDELT convention, which most modern survey headers
+            # use.  CD = PC * diag(CDELT).  Ignoring PC and falling through
+            # to CDELT with CROTA2 -- which this parser used to do -- silently
+            # drops the rotation and any skew, so every world coordinate is
+            # wrong by the field's rotation angle.
+            pc = np.array([
+                [float(header.get("PC1_1", 1.0)), float(header.get("PC1_2", 0.0))],
+                [float(header.get("PC2_1", 0.0)), float(header.get("PC2_2", 1.0))],
+            ])
+            cdelt = np.array([float(header.get("CDELT1", -1.0 / 3600.0)),
+                              float(header.get("CDELT2", 1.0 / 3600.0))])
+            cd = pc * cdelt[None, :]
         else:
             cdelt1 = float(header.get("CDELT1", -1.0 / 3600.0))
             cdelt2 = float(header.get("CDELT2", 1.0 / 3600.0))

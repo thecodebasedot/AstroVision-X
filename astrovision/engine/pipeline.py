@@ -29,6 +29,7 @@ from ..classify import Classifier
 from ..core.config import AstroVisionConfig
 from ..core.exceptions import PipelineError
 from ..core.logging import get_logger, timed
+from ..core.provenance import build_manifest, catalog_digest
 from ..core.types import FieldAnalysis
 from ..detect import Detector
 from ..io.external import build_service, crossmatch_catalog
@@ -508,6 +509,16 @@ class Pipeline:
             "capabilities": _capabilities(),
             "version": _version(),
         }
+        # What it would take to get this exact catalog again: the
+        # configuration, the code revision, the numerical dependencies, the
+        # seeds and the input checksum -- and a digest of the catalog itself,
+        # so a repeat run can be checked against this one.
+        inputs = [p for p in (image.meta.get("source_path"),) if p]
+        manifest = build_manifest(cfg, inputs=inputs,
+                                  seeds={"random_state": int(cfg.random_state)})
+        manifest.outputs["catalog_digest"] = catalog_digest(analysis.catalog)
+        analysis.provenance["manifest"] = manifest.to_dict()
+        analysis.provenance["reproducibility_key"] = manifest.reproducibility_key()
 
         self._stage("assistant", True,
                     lambda: {"narrative": self.assistant.report(analysis)}, analysis)

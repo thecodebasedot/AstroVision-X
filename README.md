@@ -326,6 +326,7 @@ pip install -e ".[science]"      # + SciPy, Astropy
 pip install -e ".[ml]"           # + scikit-learn
 pip install -e ".[deep]"         # + PyTorch
 pip install -e ".[all]"          # everything except PyTorch
+pip install -e ".[benchmark]"    # + photutils, SEP, for comparing catalogs
 ```
 
 Optional dependencies enable *features*, never whole subsystems. Without
@@ -374,6 +375,28 @@ analysis = Pipeline().run_series(series)
 The pipeline reads the zero point from `MAGZP`, the gain from `GAIN` and the
 saturation level from `SATURATE` when present, and falls back to configured
 values otherwise. Every assumption it had to make is listed in the report.
+
+Survey products come as several planes, and those are read as such:
+
+```python
+from astrovision.io import load_survey_image
+from astrovision.engine.tiles import process_tiled, standard_stage
+
+image, report = load_survey_image("c4d_r_ooi.fits.fz")   # SCI + MASK + WEIGHT
+print(report.notes)                                      # what the loader assumed
+
+result = process_tiled(image, standard_stage(), tile=2048, overlap=128)
+catalog = result.catalog                                 # a 16k frame in 2k tiles
+```
+
+The data-quality plane becomes the mask, the weight plane becomes the noise
+model, pixels already in electrons are recognised so the gain is not applied
+twice, and a frame too large to hold in memory several times over is processed
+in overlapping tiles and merged into one catalog. Every run carries a manifest
+(configuration hash, code revision, dependency versions, seeds, input
+checksums) and a digest of its catalog, so a repeat run can be checked against
+it. With `pip install -e ".[benchmark]"` the catalog can be compared with
+photutils and SEP on the same pixels.
 
 ---
 

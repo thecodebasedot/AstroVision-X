@@ -424,6 +424,69 @@ catalog = read_catalog("catalog.csv")
 matches = crossmatch(catalog_a, catalog_b, radius=2.0, use_world=True)
 ```
 
+## Survey products
+
+```python
+from astrovision.io import load_survey_image
+
+image, report = load_survey_image("frame.fits.fz")     # SCI / MASK / WEIGHT (or VAR) planes
+image.mask, image.uncertainty                          # from the DQ bits and 1/sqrt(weight)
+report.gain, report.gain_source                        # "header", "assumed" or "pixels in electrons"
+report.n_masked, report.n_saturated, report.notes      # every assumption the loader made
+load_survey_image("frame.fits", mask_bits=1 | 4 | 16)  # honour only these DQ bits
+```
+
+The planes are found by their `EXTNAME` (`SCI`, `IMAGE`; `MASK`, `DQ`,
+`FLAGS`; `WEIGHT`, `WHT`, `IVAR`; `VAR`, `VARIANCE`; `ERR`, `SIGMA`), the
+science header is searched for gain, read noise, saturation, zero point,
+exposure and filter under every common spelling, and pixels already in
+electrons are recognised from `BUNIT` so the gain is not applied twice. A
+variance or weight plane becomes `image.uncertainty` and is combined with the
+preprocessor's own estimate rather than replaced by it; zero-weight pixels are
+masked. Frames past sixteen million pixels are memory-mapped.
+
+## Frames too large for memory
+
+```python
+from astrovision.engine.tiles import process_tiled, standard_stage, plan_tiles
+
+result = process_tiled(image, standard_stage(config), tile=2048, overlap=128)
+result.catalog                          # frame coordinates; each source knows its tile
+result.n_duplicates_removed, result.peak_tile_pixels, result.per_tile
+
+standard_stage(config, psf="shared")    # one PSF for every tile (default)
+standard_stage(config, psf="per-tile")  # each tile fits its own, if it has the stars
+for tile, sub in iter_tiles(image, tile=2048, overlap=128): ...
+```
+
+## Checking against other codes
+
+```python
+from astrovision.validation import benchmark_field, available_tools
+
+available_tools()                                     # {"photutils": True, "sep": True}
+for result in benchmark_field(clean, catalog, truth=truth, aperture_radius=5.0):
+    print(result.summary())
+    result.against_truth                              # recall, spurious, flux ratio per code
+```
+
+Needs `pip install -e ".[benchmark]"`. The comparison is on the same pixels,
+the same threshold and the same aperture; the measured agreement is in
+[`validation.md`](validation.md).
+
+## Reproducing a run
+
+```python
+from astrovision.core.provenance import build_manifest, Manifest, same_result
+
+manifest = build_manifest(config, inputs=["frame.fits"], seeds={"random_state": 42})
+manifest.save("results/manifest.json")
+manifest.reproducibility_key()          # hash of everything that decides the result
+Manifest.load(path).differences(other)  # ["numpy 1.26.4 vs 2.0.1", "random seeds differ"]
+same_result(catalog_a, catalog_b)       # identical measurements, to 1e-6
+analysis.provenance["manifest"]         # the pipeline attaches one to every run
+```
+
 ## Simulation
 
 ```python

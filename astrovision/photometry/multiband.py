@@ -34,7 +34,8 @@ from ..core.logging import get_logger
 from ..core.types import Photometry, Source, SourceCatalog
 from ..io.image import AstroImage
 from ..preprocess.psf import PSFModel, match_psf
-from .aperture import annulus_background, circular_aperture_weights, elliptical_photometry
+from .aperture import (annulus_background, circular_aperture_weights, elliptical_photometry,
+                       stamp_box)
 from .magnitudes import flux_to_magnitude
 
 log = get_logger("photometry.multiband")
@@ -231,23 +232,27 @@ def forced_photometry(images: Mapping[str, AstroImage],
             if not (0 <= x < data.shape[1] and 0 <= y < data.shape[0]):
                 source.bands[band] = Photometry()
                 continue
-            neighbours = _neighbour_mask(image, segmentation, source)
-            if use_kron and np.isfinite(source.photometry.aperture_radius):
-                # The Kron aperture was measured in detection-band pixels;
-                # convert through both scales so it covers the same sky.
-                semi_major = source.photometry.aperture_radius * detection_scale / scale
+            kron = use_kron and np.isfinite(source.photometry.aperture_radius)
+            # The Kron aperture was measured in detection-band pixels;
+            # convert through both scales so it covers the same sky.
+            semi_major = (source.photometry.aperture_radius * detection_scale / scale
+                          if kron else float("nan"))
+            reach = max(outer, radius, semi_major if kron else 0.0) + 3.0
+            rows, cols, centre = stamp_box(data.shape, (float(x), float(y)), reach)
+            stamp, stamp_rms = data[rows, cols], rms[rows, cols]
+            neighbours = _neighbour_mask(image, segmentation, source, rows, cols)
+            if kron:
                 axis = _axis_ratio(source)
                 result = elliptical_photometry(
-                    data, (float(x), float(y)), max(semi_major, 1.5),
+                    stamp, centre, max(semi_major, 1.5),
                     max(semi_major * axis, 1.0), source.morphology.position_angle,
-                    rms=rms, gain=gain, mask=neighbours)
+                    rms=stamp_rms, gain=gain, mask=neighbours)
                 flux, flux_err = result.flux, result.flux_err
                 background = result.background
                 used_radius = semi_major
             else:
                 flux, flux_err, background = _circular_flux(
-                    data, rms, (float(x), float(y)), radius, gain,
-                    (inner, outer), neighbours)
+                    stamp, stamp_rms, centre, radius, gain, (inner, outer), neighbours)
                 used_radius = radius
 
             flux = float(flux) * aperture_correction
@@ -307,12 +312,16 @@ def _axis_ratio(source: Source) -> float:
 
 
 def _neighbour_mask(image: AstroImage, segmentation: Optional[np.ndarray],
-                    source: Source) -> Optional[np.ndarray]:
+                    source: Source, rows: slice = slice(None), cols: slice = slice(None)
+                    ) -> Optional[np.ndarray]:
+    """Other objects' pixels plus the image mask, on the ``rows, cols`` stamp."""
     mask = None
     if segmentation is not None and segmentation.shape == image.shape:
-        mask = (segmentation > 0) & (segmentation != source.segment_label)
+        labels = segmentation[rows, cols]
+        mask = (labels > 0) & (labels != source.segment_label)
     if image.mask is not None:
-        mask = image.mask if mask is None else (mask | image.mask)
+        local = image.mask[rows, cols]
+        mask = local if mask is None else (mask | local)
     return mask
 
 

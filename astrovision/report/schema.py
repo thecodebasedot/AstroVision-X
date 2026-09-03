@@ -49,6 +49,8 @@ def build_report(analysis: FieldAnalysis, title: str = "AstroVision-X Field Anal
         "capabilities": provenance.get("capabilities", {}),
         "config": provenance.get("config", {}),
         "elapsed_seconds": provenance.get("elapsed_seconds"),
+        "manifest": provenance.get("manifest"),
+        "reproducibility_key": provenance.get("reproducibility_key"),
     }
 
     if statistics.get("transient"):

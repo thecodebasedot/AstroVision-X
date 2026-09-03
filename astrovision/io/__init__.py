@@ -31,6 +31,7 @@ from .image import AstroImage, ImageSeries
 from .wcs import SimpleWCS, angular_separation, wcs_from_header
 
 __all__ = [
+    "SurveyLoadReport", "load_survey_image", "write_survey_image",
     "AstroImage", "ImageSeries",
     "SimpleWCS", "angular_separation", "wcs_from_header",
     "read_fits", "write_fits", "list_hdus", "is_fits",
@@ -40,3 +41,5 @@ __all__ = [
     "VizieRCone", "SimbadCone", "build_service", "crossmatch_catalog",
     "CrossmatchReport", "read_reference_file", "write_reference_file",
 ]
+
+from .survey import SurveyLoadReport, load_survey_image, write_survey_image  # noqa: E402

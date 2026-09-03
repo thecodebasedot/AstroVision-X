@@ -1046,6 +1046,126 @@ archive files, and the domain shift is measured between two simulated
 instruments. What that buys is the *method* and the shape of the answer; what
 it does not buy is a number for any particular survey.
 
+## Reading what a survey actually delivers
+
+A survey image is not a FITS file with a picture in it. It is a science plane,
+a data-quality plane whose bits mean different things in every pipeline, and a
+weight or variance plane that is the survey's own statement of its noise —
+and a header whose gain keyword may be `GAIN`, `EGAIN`, `ARCONG` or absent,
+whose pixels may already be in electrons, and whose saturation level is the
+one thing that must be believed. Getting any of these wrong is silent: a gain
+applied twice halves every Poisson error, an ignored weight plane leaves the
+photometer guessing at noise the survey had already measured, a missed
+saturation limit puts a flat-topped star through the PSF fitter.
+
+The loader (`io.survey`) reads the planes by their `EXTNAME`, converts a weight
+plane to σ = 1/√w and masks zero weight rather than calling it infinite noise,
+masks every set DQ bit unless told which bits matter, reads the saturation
+level and masks above it, and recognises `BUNIT = electron` so the gain becomes
+one. Each of those is a choice, and each is written into the load report so
+the analysis can say what it assumed. The preprocessor then *combines* the
+survey's noise plane with its own estimate — the larger of the two, pixel by
+pixel — rather than overwriting it, which is what it did before this was
+tested.
+
+Two conventions the world-coordinate reader had wrong are worth naming. A
+header written as a `PC` matrix with `CDELT` — the form most modern pipelines
+emit — was being read as if it had no rotation, and every world coordinate
+was off by the field's rotation angle. And a frame past a few tens of
+megapixels is memory-mapped, so a 4 GB mosaic is opened rather than loaded.
+
+None of this was tested on an archive file: nothing outside the package
+registries was reachable from the environment it was written in. It is tested
+on files written in the same layout, which proves the conventions are handled
+and does not prove that any particular survey's are.
+
+## Checking against codes that have been checked
+
+photutils and SEP are what the community measures with, and they have twenty
+years of comparison behind them. A new photometry code that has only ever been
+compared with its own simulator has one obvious blind spot: the simulator and
+the code were written by the same hands. So `validation.benchmark` runs both
+tools on the same pixels, with the same threshold and the same aperture, and
+matches the three catalogs to each other and — when the field is simulated —
+to the truth.
+
+The numbers are in `validation.md`. Where both codes detect an object they
+agree on its position to a few hundredths of a pixel and on its flux to a few
+tenths of a percent, which is what it means for two implementations of the
+same measurement to be correct. Where they disagree is on *which* objects to
+report near the threshold, and the truth table is what settles that: most of
+what this package finds and the others do not are faint real objects, and a
+handful are noise.
+
+What the benchmark found that no simulator comparison had was that the
+photometry stage was slow — a second per source on a survey frame, because
+every aperture was a full-frame array — and that is the reason
+`photometry.aperture` now works on cut-outs. The measurement is the same to
+the last bit; the time is a thousandth.
+
+## A frame too large to process
+
+A survey frame is sixteen thousand pixels on a side, and the stages here were
+written for a field that fits in memory several times over — a filtered
+copy, a segmentation map, a background model, a noise map. On a gigapixel
+they do not. So the frame is cut into tiles that do, each is processed as a
+field of its own, and the catalogs are merged (`engine.tiles`).
+
+Every mistake a tiling can make was made here first and then addressed by
+name:
+
+- **A thin remainder tile.** A 384-pixel tiling of a 1024-pixel frame left a
+  160-pixel strip whose background mesh and PSF star count were unlike every
+  other tile's; fluxes measured in it were 6 % off. The planner now fixes the
+  tile count and stretches the tiles evenly, so every tile is the same size.
+- **Truncated fragments at tile edges.** An object cut by a tile boundary is
+  detected in that tile as a fragment whose centroid is pulled several pixels
+  toward the edge — farther than any matching radius, so a nearest-neighbour
+  merge kept both copies. The tiles' *cores* — each tile's region minus half
+  the overlap on every interior side — partition the frame exactly, and a
+  source is kept only from the tile whose core contains it. The fragment is
+  outside its tile's core and is dropped without being matched at all. The
+  matching radius is left with the one case it can handle: an object sitting
+  on a core boundary, whose two centroids fall on either side of it.
+- **A PSF per tile.** The aperture correction is one over the PSF's enclosed
+  energy, and a PSF fitted from the fifteen stars a tile happens to hold
+  differs from its neighbour's by a percent, so corrected fluxes stepped at
+  every tile boundary. One PSF is built from a central tile and shared, and
+  the measured tile-to-tile spread of the correction fell from 1.1 % to
+  0.4 %. What a shared PSF cannot represent is a PSF that varies across a
+  mosaic; the spatially varying fit runs on whole frames only, and the
+  per-tile mode is there for the case where each tile is its own detector.
+- **A background per tile.** This one is kept on purpose. A 16k frame has sky
+  structure no single fit follows, and the overlap is what lets the merge
+  ignore the small step between neighbouring tiles' estimates.
+
+Positions come back in the frame's own pixels, every source records which
+tile measured it and how far from that tile's edge, and the whole thing is
+measured against the whole-image catalog on a frame small enough to do both
+(`validation.md`). Peak memory is the size of one tile, not the frame.
+
+## Writing down what produced the result
+
+A catalog without its provenance is a number without a unit. The question
+that arrives six months later is never "what did the pipeline find" but "could
+I get it again, and if not, what changed", and the answer has to come from
+something written down at the time.
+
+Every run therefore carries a manifest (`core.provenance`): a content hash of
+the configuration and the configuration itself, the package version and git
+revision with a flag if the tree was dirty, the versions of every dependency
+that does arithmetic — NumPy, SciPy, Astropy, scikit-learn, PyTorch — the
+random seeds, and a checksum of each input file. A reproducibility key
+summarises the parts that decide the result, so two manifests can be compared
+in one line, and `differences()` says in words why two runs might not agree.
+The run's own catalog is digested too, rounded to a millionth of a pixel so a
+last-bit difference in a sum does not register as a failure while anything
+larger does. The test suite asserts the property this exists for: two runs
+with the same key produce the same digest.
+
+What a manifest cannot do is make a result from uncommitted code reproducible;
+it can only say so, and it does.
+
 ## What none of this can do
 
 Nothing here confirms anything. A transient candidate needs an independent

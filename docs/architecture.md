@@ -112,6 +112,18 @@ Anomaly detection sits between (1) and (3): the autoencoder uses a non-linear
 PyTorch model when it can and a PCA-equivalent linear one when it cannot, and
 both are genuinely useful.
 
+A fourth kind of dependency is not used by the pipeline at all: photutils and
+SEP, under the `benchmark` extra, exist so that `validation.benchmark` can run
+them on the same pixels and report where this package agrees with them and
+where it does not. They are never on the path that produces a catalog.
+
+Two further things follow from wanting to run on survey frames. Every
+photometric routine works on the smallest rectangle that contains its aperture
+(`photometry.aperture.stamp_box`), never on the whole frame, and
+`engine.tiles` cuts a frame into overlapping tiles whose cores partition it,
+runs the stages per tile, and merges by core membership. The per-tile
+background is a feature; the per-tile PSF is not, so one PSF is shared.
+
 ## Configuration
 
 One `AstroVisionConfig` dataclass tree describes a run completely. It can be
