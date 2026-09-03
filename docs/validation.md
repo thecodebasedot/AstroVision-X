@@ -1171,6 +1171,58 @@ input. Tests check that:
 
 Tests: `tests/test_provenance.py`.
 
+## Environments
+
+The package promises that every optional dependency is a feature and never a
+requirement. CI now runs the suite in each environment that promise covers:
+
+| Job | Installed | Python |
+| --- | --- | --- |
+| numpy-only | NumPy | 3.11 |
+| numpy-1.21 | NumPy 1.21.6, the declared floor | 3.9 |
+| science | + SciPy, Astropy | 3.11 |
+| ml | + scikit-learn | 3.11 |
+| deep | + SciPy, Astropy, scikit-learn, PyTorch (CPU) | 3.11 |
+| all | + SciPy, Astropy, scikit-learn, Matplotlib | 3.9, 3.11 |
+| all+benchmark | + photutils, SEP | 3.12 |
+
+Setting this up found that the NumPy-only job had been red on every push of
+this branch. The failing test said a 6 σ threshold found 43 sources where
+3 σ found 42; with SciPy the same field gives 44 and 48. The cause was one
+word: SciPy's ``reflect`` edge mode repeats the edge sample
+(``d c b a | a b c d``) and NumPy's ``reflect`` does not (``d c b | a b c d``,
+which SciPy calls ``mirror``), and every fallback mapped the word to itself.
+The interiors agreed exactly; only the edges differed. But the background
+is estimated on a mesh — 3 × 3 cells for the test field — that has no
+interior, so the NumPy-only background model differed everywhere, by up to
+3.8 counts on a field with a 10-count sky rms, and six real sources fell
+below threshold. The Gaussian filter fallback also truncated its kernel at
+3 σ where SciPy uses 4 σ.
+
+After the fix every fallback is compared with its SciPy original, on a
+field with marked corners, in every edge mode:
+
+| Primitive | Agreement |
+| --- | --- |
+| `convolve` (reflect, nearest, mirror, wrap, constant) | 1e-10 |
+| `gaussian_filter` | 4e-15 |
+| `median_filter` (3, 5, 7) | exact |
+| `maximum_filter` (3, 5) | exact |
+| `label`, `find_objects`, `binary_dilate` | exact |
+| Preprocessed field: background, noise map, PSF FWHM | 1e-8 |
+
+The lesson is the one the whole document keeps teaching: "the results are
+identical" was a sentence in the architecture notes, not a test, for as
+long as it was wrong.
+
+A second thing the job logs showed was a stream of "I/O operation on
+closed file" errors from the logger: the handler kept the ``sys.stderr`` it
+was given at configuration, which under pytest is a capture buffer that is
+closed after the first test. The handler now resolves the stream per
+record.
+
+Tests: `tests/test_fallbacks.py`; the matrix is `.github/workflows/ci.yml`.
+
 ## What is not validated
 
 - Real instrument signatures: fringing, scattered light, non-linearity,

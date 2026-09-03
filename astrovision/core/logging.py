@@ -34,13 +34,35 @@ class _Formatter(logging.Formatter):
         return f"{stamp} {record.levelname:<7} {name:<22} | {record.getMessage()}"
 
 
+class _StderrHandler(logging.StreamHandler):
+    """A stream handler that looks up ``sys.stderr`` at emit time.
+
+    A handler built with ``sys.stderr`` keeps whatever object that was when
+    the tree was configured. Under pytest that is a capture buffer which is
+    closed at the end of the test that triggered the first log call, and
+    every later message then raises "I/O operation on closed file" into the
+    output. Resolving the stream per record follows the redirection instead.
+    """
+
+    def __init__(self):
+        super().__init__(sys.stderr)
+
+    @property
+    def stream(self):
+        return sys.stderr
+
+    @stream.setter
+    def stream(self, value):      # logging.StreamHandler.__init__ assigns it
+        pass
+
+
 def configure(level: str = "info", stream=None) -> None:
     """Attach a single stderr handler to the ``astrovision`` logger tree."""
     global _CONFIGURED
     logger = logging.getLogger(_ROOT)
     for handler in list(logger.handlers):
         logger.removeHandler(handler)
-    handler = logging.StreamHandler(stream or sys.stderr)
+    handler = logging.StreamHandler(stream) if stream is not None else _StderrHandler()
     handler.setFormatter(_Formatter())
     logger.addHandler(handler)
     logger.setLevel(LEVELS.get(str(level).lower(), logging.INFO))

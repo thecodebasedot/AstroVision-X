@@ -100,7 +100,10 @@ Three patterns are used, deliberately:
 
 1. **Transparent acceleration.** `convolve`, `label`, `median_filter` and
    friends use SciPy when it is present and a NumPy implementation otherwise.
-   The results are identical; only the speed differs.
+   The results are identical; only the speed differs. That sentence was
+   false for a year without anyone noticing -- see `validation.md` under
+   *Environments* -- and is now a test (`tests/test_fallbacks.py`) rather
+   than a claim.
 2. **Transparent substitution.** FITS reads through Astropy when available and
    through a self-contained parser otherwise. Both directions are tested
    against each other.

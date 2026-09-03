@@ -1,35 +1,76 @@
 name: CI
 
+# Every optional backend is a feature, never a requirement. That is only
+# true if the package is exercised without each of them, so the matrix runs
+# the suite in every environment the README promises: NumPy alone, the
+# science stack, scikit-learn, PyTorch, and everything together with the
+# benchmark tools. What a job skips it reports, so a test that quietly
+# skips everywhere would show up in the summary.
+
 on:
   push:
     branches: ["**"]
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    name: Python ${{ matrix.python-version }} (${{ matrix.extras }}${{ matrix.numpy && format(', numpy {0}', matrix.numpy) || '' }})
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      # Undefined names, unused imports and syntax errors only: the things
+      # that are bugs, not style.
+      - run: ruff check astrovision tests examples --select F,E9
+
+  test:
+    name: ${{ matrix.name }} (py ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.11", "3.12"]
-        extras: ["all"]
         include:
-          # NumPy alone must still work: every optional backend is a feature,
-          # never a requirement.
-          - python-version: "3.11"
-            extras: "minimal"
-          # The oldest NumPy the package claims to support.  Without this the
-          # floor in pyproject.toml is a promise nothing checks -- and it was
-          # broken by a call to `np.trapezoid`, which exists only on 2.x while
-          # `np.trapz`, the name it replaced, exists only on 1.x.
-          #
-          # Pinned on 3.9 because NumPy 1.21 has no wheels for 3.11: the
-          # oldest supported NumPy can only be exercised on a Python old
-          # enough to install it.
-          - python-version: "3.9"
-            extras: "minimal"
+          # -- the four environments the package claims to support ----------
+          - name: numpy-only
+            python-version: "3.11"
+            install: '-e ".[dev]"'
+          - name: science
+            python-version: "3.11"
+            install: '-e ".[science,dev]"'
+          - name: ml
+            python-version: "3.11"
+            install: '-e ".[ml,dev]"'
+          - name: deep
+            python-version: "3.11"
+            install: '-e ".[science,ml,dev]"'
+            torch: cpu
+          # -- everything, on every supported Python -----------------------
+          - name: all
+            python-version: "3.9"
+            install: '-e ".[all,dev]"'
+          - name: all
+            python-version: "3.11"
+            install: '-e ".[all,dev]"'
+          - name: all+benchmark
+            python-version: "3.12"
+            install: '-e ".[all,benchmark,dev]"'
+          # -- the floor -----------------------------------------------------
+          # The oldest NumPy the package claims to support. Without this the
+          # floor in pyproject.toml is a promise nothing checks -- it was
+          # broken once by `np.trapezoid`, which exists only on 2.x.
+          # Pinned on 3.9 because NumPy 1.21 has no wheels for anything newer.
+          - name: numpy-1.21
+            python-version: "3.9"
+            install: '-e ".[dev]"'
             numpy: "1.21.6"
 
     steps:
@@ -40,29 +81,27 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
-      - name: Install (minimal)
-        if: matrix.extras == 'minimal'
+      - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install ${{ matrix.install }}
 
       - name: Pin the oldest supported NumPy
         if: matrix.numpy != ''
         run: pip install "numpy==${{ matrix.numpy }}"
 
-      - name: Install (all extras)
-        if: matrix.extras == 'all'
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[all,dev]"
+      - name: Install PyTorch (CPU)
+        if: matrix.torch == 'cpu'
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Show which backends are active
         run: astrovision info
 
       - name: Run the test suite
-        run: pytest tests/ -q --durations=10
+        run: pytest tests/ -q --durations=10 -rs
 
       - name: Run the doctests
+        if: startsWith(matrix.name, 'all')
         run: pytest --doctest-modules astrovision/ -q --ignore=astrovision/cli
 
       - name: Smoke-test the command line

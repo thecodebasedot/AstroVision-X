@@ -158,8 +158,18 @@ def convolve(image: np.ndarray, kernel: np.ndarray, mode: str = "reflect") -> np
 
 
 def _np_pad_mode(mode: str) -> str:
-    return {"reflect": "reflect", "nearest": "edge", "constant": "constant",
-            "wrap": "wrap", "mirror": "reflect"}.get(mode, "reflect")
+    """SciPy's edge modes in NumPy's vocabulary.
+
+    The two libraries use the word "reflect" for different things. SciPy's
+    ``reflect`` repeats the edge sample (``d c b a | a b c d``), which NumPy
+    calls ``symmetric``; SciPy's ``mirror`` does not repeat it
+    (``d c b | a b c d``), which NumPy calls ``reflect``. Mapping the words
+    to themselves made every fallback differ from SciPy along the edges --
+    and on a 6x6 background mesh the edges are most of the array, so the
+    NumPy-only detection lost six of 48 sources on a test field.
+    """
+    return {"reflect": "symmetric", "nearest": "edge", "constant": "constant",
+            "wrap": "wrap", "mirror": "reflect"}.get(mode, "symmetric")
 
 
 def gaussian_filter(image: np.ndarray, sigma: float) -> np.ndarray:
@@ -167,7 +177,10 @@ def gaussian_filter(image: np.ndarray, sigma: float) -> np.ndarray:
     scipy_ndimage = try_import("scipy.ndimage")
     if scipy_ndimage is not None:
         return scipy_ndimage.gaussian_filter(as_float_image(image), sigma=float(sigma))
-    return convolve(image, gaussian_kernel(sigma))
+    # SciPy truncates the kernel at int(4 sigma + 0.5); match it so both
+    # paths agree to floating-point precision.
+    radius = int(4.0 * max(float(sigma), 1e-3) + 0.5)
+    return convolve(image, gaussian_kernel(sigma, size=2 * radius + 1))
 
 
 def median_filter(image: np.ndarray, size: int = 3) -> np.ndarray:
@@ -178,7 +191,7 @@ def median_filter(image: np.ndarray, size: int = 3) -> np.ndarray:
         return scipy_ndimage.median_filter(data, size=int(size))
     size = max(3, int(size) | 1)
     half = size // 2
-    padded = np.pad(data, half, mode="reflect")
+    padded = np.pad(data, half, mode=_np_pad_mode("reflect"))   # SciPy's default
     windows = np.lib.stride_tricks.sliding_window_view(padded, (size, size))
     return np.median(windows, axis=(-2, -1))
 
@@ -191,7 +204,7 @@ def maximum_filter(image: np.ndarray, size: int = 3) -> np.ndarray:
         return scipy_ndimage.maximum_filter(data, size=int(size))
     size = max(3, int(size) | 1)
     half = size // 2
-    padded = np.pad(data, half, mode="edge")
+    padded = np.pad(data, half, mode=_np_pad_mode("reflect"))   # SciPy's default
     windows = np.lib.stride_tricks.sliding_window_view(padded, (size, size))
     return windows.max(axis=(-2, -1))
 

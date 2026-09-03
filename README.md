@@ -419,7 +419,15 @@ photutils and SEP on the same pixels.
 pip install -e ".[all,dev]"
 pytest                           # the full suite
 pytest -m "not slow" -q          # quick run
+ruff check astrovision tests --select F,E9
 ```
+
+Continuous integration runs the suite in every environment the package
+claims to support, because "optional" is only true if it is tested:
+NumPy alone, NumPy 1.21 (the floor), the science stack, scikit-learn,
+PyTorch, and everything together with the benchmark tools, across Python
+3.9 to 3.12. Each job reports what it skipped, so a test that silently skips
+everywhere shows up in the summary.
 
 ## License
 
