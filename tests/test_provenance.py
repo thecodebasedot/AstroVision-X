@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 
 import numpy as np
-import pytest
 
 from astrovision.core.config import AstroVisionConfig
 from astrovision.core.provenance import (Manifest, build_manifest, catalog_digest, config_hash,

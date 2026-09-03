@@ -178,8 +178,17 @@ class TestEndToEnd:
         stage = standard_stage(psf="shared")
         result = process_tiled(image, stage, tile=256, overlap=96)
         assert stage.shared_psf is not None
-        corrections = {round(s.meta.get("aperture_correction", 1.0), 3)
-                       for s in result.catalog
-                       if abs(s.photometry.aperture_radius - 5.0) < 0.05}
-        # The same PSF and the same radius give the same correction in every tile.
-        assert len(corrections) <= 1
+        from astrovision.photometry import Photometer
+
+        # Every source's correction is the one the shared PSF gives at its
+        # radius, whichever tile measured it.
+        checked = 0
+        for source in result.catalog:
+            if "aperture_correction" not in source.meta:
+                continue
+            expected = Photometer.aperture_correction(stage.shared_psf,
+                                                      source.photometry.aperture_radius)
+            assert source.meta["aperture_correction"] == pytest.approx(expected, rel=1e-9)
+            checked += 1
+        assert checked > 50
+        assert len({s.meta["tile"] for s in result.catalog}) == 9

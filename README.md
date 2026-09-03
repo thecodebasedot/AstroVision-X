@@ -238,6 +238,9 @@ bad columns. They are *not* claims about real survey data.
 | BPT classification | 7/7 across the ionisation sequence |
 | Supernova typing | 30/36 typed, all 30 correct, 0 wrong |
 | Photometric redshift (5 filters) | scatter 0.015 in Δz/(1+z), 2.8 % outliers |
+| Agreement with photutils and SEP | 0.06–0.08 px, 0.2–0.3 % in flux where both detect |
+| Tiled vs whole-image catalog | 0.002 px, 0.1–1 % in flux, memory 191 → 23 MB |
+| Aperture photometry, 4096² frame | 1817 ms → 0.31 ms per aperture, identical to 4 × 10⁻¹⁶ |
 | Photometric redshift (3 filters) | scatter 0.043, 22 % outliers — the filter count dominates |
 | Galaxy morphology (5 classes) | 59 % exact, 78 % at family level |
 | Transient recall | 12/14, with 2 spurious over five fields |

@@ -1102,9 +1102,10 @@ What the benchmark did find was a performance defect. Timed on the same
 | | Before | After |
 | --- | --- | --- |
 | Photometry, 169 sources | 17.6 s | 1.1 s |
+| Preprocess + detect + photometry, 512² | 18.3–19.5 s | 2.0 s |
 | One aperture on a 4096² frame | 1817 ms | 0.31 ms |
 | photutils, whole field | 0.2–3.2 s | — |
-| SEP, whole field | 0.0–0.1 s | — |
+| SEP, whole field | < 0.1 s | — |
 
 Every aperture, annulus, growth-curve step and Petrosian ring was a
 full-frame array, about two hundred of them per source. They now work on the
@@ -1113,6 +1114,44 @@ code to 4 × 10⁻¹⁶ relative, checked over circles, ellipses, masks, edge
 positions and NaNs.
 
 Tests: `tests/test_benchmark.py` (skipped where the tools are not installed).
+
+## Tiled processing
+
+Two 1024² fields (400 stars, 60 galaxies, two nebulae, two clusters),
+processed whole and in tiles, catalogs matched within 2 px:
+
+| Seed | Tiles / overlap | Whole | Tiled | Matched | Position | Flux ratio (tiled / whole) | Recall whole → tiled | Peak memory |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 16 × 328 / 96 | 427 | 430 | 426 | 0.002 px | 1.007 ± 0.017 | 0.913 → 0.913 | 191 → 23 MB |
+| 1 | 9 × 419 / 128 | 427 | 428 | 425 | 0.001 px | 1.001 ± 0.016 | 0.913 → 0.910 | 191 → 37 MB |
+| 2 | 16 × 328 / 96 | 462 | 462 | 454 | 0.002 px | 1.004 ± 0.036 | 0.925 → 0.937 | 191 → 24 MB |
+| 2 | 9 × 419 / 128 | 462 | 459 | 455 | 0.002 px | 1.010 ± 0.028 | 0.925 → 0.928 | 191 → 38 MB |
+
+Sources near a tile boundary are measured no differently from the rest
+(flux ratio 1.001–1.010 within 20 px of a boundary, the same as the field).
+The residual 0.1–1 % is the per-tile background, and the 3–8 sources found
+on only one side are threshold cases near S/N 4, split evenly.
+
+Three earlier states of the merge are recorded because each one looked
+plausible and was wrong:
+
+| Merge | Only in tiled | Flux ratio | Cause |
+| --- | --- | --- | --- |
+| Nearest neighbour within 2 px, remainder tiles allowed | 43 | 1.009 ± 0.032, 33 sources > 5 % off | truncated edge fragments 3–5 px from the whole-image centroid; a 160-px remainder strip 6 % off |
+| Core membership, equal tiles, PSF per tile | 4 | 1.064 ± 0.088 | — but the *whole-image* run had no PSF and hence no aperture correction; the tiled one did |
+| Core membership, equal tiles, shared PSF | 3–8 | 1.001–1.010 | as above |
+
+Which PSF to use was decided against the truth on the same fields: stars
+of 2000–60000 counts recover 1.006 and 0.999 of their true flux with the
+shared PSF (tile-to-tile spread of the correction 0.4 %), 1.011 and 1.005
+with a PSF per tile (spread 1.1 %), and 0.945 with no correction at all.
+
+Tiled is slower on a frame small enough to do whole (28 s against 20 s):
+the per-tile preprocessing repeats what the whole frame did once. It is not
+a speed-up; it is the difference between a frame that runs and one that
+does not fit.
+
+Tests: `tests/test_tiles.py`.
 
 ## Reproducibility
 
