@@ -1228,6 +1228,50 @@ position through CSV to a milliarcsecond.
 
 Tests: `tests/test_healpix.py`, `tests/test_catalog_db.py`.
 
+## The vetting page
+
+Tested through its HTTP API with a real analysis behind it: the page and
+the queue are served; the first item carries a 64-pixel cutout (upscaled to
+256 as PNG), the model's label and verdict, reasons, caveats, evidence and
+measurements; a posted verdict lands in the log with the reviewer's name
+and the model's label, and the next item is one this reviewer has not
+decided; an anonymous verdict is refused with 400 and leaves the log
+untouched; three verdicts on one item from two reviewers are three records
+and one disagreement; a log written before the ``kind`` field existed still
+loads. The PNG encoder is checked chunk by chunk (signature, IHDR size,
+inflated IDAT length) and the asinh stretch is checked to show a 6-sigma
+source and a 5000-count star on the same stamp. The page was driven in
+Chromium for the screenshots in this session.
+
+Tests: `tests/test_vetting.py`.
+
+## Alerts
+
+**The Avro codec.** A record with every Avro type (boolean, int, long,
+float, double, string, bytes, null union, array, map, enum, fixed, nested
+record, named-type reference) round-trips through the encoder and decoder;
+zig-zag longs are checked at 0, ±1, ±64, 2³¹−1, −2³¹, 2⁶², −2⁶³; a
+150-record container round-trips in 64-record blocks under ``null`` and
+``deflate``; a flipped sync-marker byte is an error; a missing required
+field is refused. With fastavro installed, files this module writes are
+read back identically by fastavro and files fastavro writes are read back
+identically by this module.
+
+**The packet.** A packet with three history epochs and two cutouts
+round-trips through an alert file with every field intact (floats to
+float32 precision, cutouts exactly). A ZTF-shaped record with a null
+``prv_candidates`` entry and a Rubin-shaped record with ``psfFlux`` in
+nanojansky are both understood; 3631 nJy comes back as AB 22.5. Packets
+built from the pipeline's transients on a simulated series carry the epoch,
+band, science and template cutouts, the reproducibility key, and a
+reviewer's verdict when the active-learning log has one.
+
+**The TNS draft** has the bulk-report layout, lists what a person still
+has to fill in, is refused without a reporter, and the module imports no
+HTTP client (a test asserts that from its source).
+
+Tests: `tests/test_alerts.py`.
+
 ## Reproducibility
 
 The manifest records the configuration hash, package version, git revision

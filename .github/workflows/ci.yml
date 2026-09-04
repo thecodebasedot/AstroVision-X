@@ -62,7 +62,7 @@ jobs:
             install: '-e ".[all,dev]"'
           - name: all+benchmark
             python-version: "3.12"
-            install: '-e ".[all,benchmark,dev]"'
+            install: '-e ".[all,benchmark,alerts,dev]"'
           # -- the floor -----------------------------------------------------
           # The oldest NumPy the package claims to support. Without this the
           # floor in pyproject.toml is a promise nothing checks -- it was

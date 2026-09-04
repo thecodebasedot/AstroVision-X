@@ -242,6 +242,7 @@ bad columns. They are *not* claims about real survey data.
 | Tiled vs whole-image catalog | 0.002 px, 0.1–1 % in flux, memory 191 → 23 MB |
 | Aperture photometry, 4096² frame | 1817 ms → 0.31 ms per aperture, identical to 4 × 10⁻¹⁶ |
 | Catalog database, 500k detections | cone search 2.5 ms at 5″, object history 0.13 ms |
+| Avro alert codec (stdlib) | byte-for-byte interchange with fastavro, both directions |
 | HEALPix index | exact agreement with healpy, nside 1 to 256 |
 | Photometric redshift (3 filters) | scatter 0.043, 22 % outliers — the filter count dominates |
 | Galaxy morphology (5 classes) | 59 % exact, 78 % at family level |
@@ -405,7 +406,17 @@ fields and epochs are linked into objects with histories:
 ```bash
 astrovision db survey.sqlite cone 150.1 2.2 30      # everything within 30" of a position
 astrovision db survey.sqlite history 1234           # one object's detections over time
-``` Every run carries a manifest
+astrovision vet field.fits --log verdicts.json      # a page where an astronomer decides
+astrovision series epoch_*.fits --alerts out.avro   # transients as Avro alerts (ZTF vocabulary)
+astrovision alerts tns out.avro --reporter "Name"   # a TNS report drafted, never sent
+```
+
+The vetting page shows one candidate at a time with its cutouts, evidence
+and history; a verdict is one keystroke and is recorded under the reviewer's
+name beside what the model said. Alerts are written and read in the
+community's Avro formats with a standard-library codec, and a Transient Name
+Server report can be drafted from one, with a named reporter, for a person to
+submit. Every run carries a manifest
 (configuration hash, code revision, dependency versions, seeds, input
 checksums) and a digest of its catalog, so a repeat run can be checked against
 it. With `pip install -e ".[benchmark]"` the catalog can be compared with

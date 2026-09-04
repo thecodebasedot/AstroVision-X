@@ -516,6 +516,28 @@ line does the same: `astrovision analyze image.fits --db survey.sqlite`,
 then `astrovision db survey.sqlite cone RA DEC RADIUS`,
 `astrovision db survey.sqlite history OBJECT`, `astrovision db survey.sqlite info`.
 
+## Alerts and reports to the community
+
+```python
+from astrovision.alerts import (packets_from_analysis, write_alerts, read_alerts,
+                                draft_tns_report, write_tns_draft)
+
+packets = packets_from_analysis(analysis, series=series, verdict_log=log)   # one per transient
+write_alerts("alerts.avro", packets)              # Avro, ZTF vocabulary, cutouts as FITS.gz
+schema, packets = read_alerts("ztf_public.avro")  # ours, real ZTF, or Rubin diaSource alerts
+packets[0].history, packets[0].cutout_science, packets[0].real_bogus
+
+report = draft_tns_report(packets[0], reporter="A. Astronomer", reporting_group_id=..,
+                          data_source_id=.., instrument_id=.., at_type="supernova")
+write_tns_draft(report, "tns_draft.json")         # marked _draft; nothing here can send
+```
+
+The Avro codec is standard-library Python and is cross-checked against
+fastavro (`pip install -e ".[alerts]"`) when that is installed. Command line:
+`astrovision series epoch_*.fits --alerts alerts.avro`,
+`astrovision alerts read alerts.avro`,
+`astrovision alerts tns alerts.avro --reporter "A. Astronomer" --candid N`.
+
 ## Reproducing a run
 
 ```python

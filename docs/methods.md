@@ -1235,6 +1235,56 @@ with the same key produce the same digest.
 What a manifest cannot do is make a result from uncommitted code reproducible;
 it can only say so, and it does.
 
+## Where the decision is made
+
+Every stage of this package ends in a recommendation; a person makes the
+decision. `vetting` is where. It serves one local page from the standard
+library: a candidate at a time, its cutout and background-subtracted cutout,
+the pipeline's verdict, its reasons and caveats, the numbers behind them,
+and -- when the catalog database holds earlier epochs -- the object's
+history. A verdict is one key: R for real, B for bogus, U for unsure, S to
+skip. Each is appended to the active-learning log with the model's label and
+confidence beside it, under the reviewer's name. A verdict without a name is
+refused by the server, because an unattributed decision cannot be told from
+the model's own output and training on it is self-training. The page shows
+its own disclaimer: nothing on it is a confirmed detection, and the verdict
+is the reviewer's.
+
+## Speaking the community's formats
+
+Alert brokers exchange Avro, and a candidate worth reporting goes to the
+Transient Name Server as a specific JSON document. `alerts` does both, with
+one constraint chosen on purpose.
+
+**Avro without a dependency.** Reading an alert should not need a compiled
+library on a machine that has only NumPy, so the Avro binary encoding and
+the object-container format are implemented in plain Python: zig-zag
+varints, little-endian floats, length-prefixed bytes, records as fields in
+order, unions as index then value, blocks with a sync marker, ``null`` or
+``deflate``. The reader is schema-driven -- it decodes whatever schema the
+file embeds -- so a real ZTF or Rubin file is read in full. When fastavro is
+installed it is used instead, and the tests write with each and read with
+the other.
+
+**One vocabulary out, three in.** Alerts this package writes use ZTF's
+names (``objectId``, ``candid``, ``candidate.jd``, ``magpsf``, ``rb``,
+``prv_candidates``, gzip-compressed FITS cutouts) so the community's filters
+and plots read them unchanged; it is a documented subset, and fields the
+package cannot measure are absent rather than invented. Coming in, the
+packet reader understands that vocabulary, ZTF's own, and Rubin's
+``diaSource`` spelling (``midpointMjdTai``, ``psfFlux`` in nanojansky,
+``band``), and gives one :class:`AlertPacket` for all three.
+
+**A report drafted, never sent.** The TNS draft has the bulk-report layout
+-- position with error, group, source and instrument ids, reporter,
+discovery date, type, the discovery photometry, the last non-detection --
+built from the packet's history. It requires a reporter's name, marks
+itself ``_draft``, lists in ``_todo`` everything a person still has to fill
+in or check (the TNS ids, a missing non-detection, an unvetted candidate),
+and there is no HTTP client in the module at all. A claim to the community
+is made by a person under their own credentials; the package writes the
+form.
+
 ## What none of this can do
 
 Nothing here confirms anything. A transient candidate needs an independent

@@ -164,6 +164,13 @@ def cmd_series(args: argparse.Namespace) -> int:
         title=config.report.title, observer=config.report.observer,
         top_candidates=config.report.top_candidates,
         image=series.reference)
+    if getattr(args, "alerts", None):
+        from ..alerts import packets_from_analysis, write_alerts
+
+        packets = packets_from_analysis(analysis, series=series,
+                                        zero_point=config.photometry.zero_point)
+        n = write_alerts(args.alerts, packets)
+        print(f"  {'alerts':<14} {args.alerts} ({n} packets, ZTF vocabulary)")
 
     print(f"\n{len(paths)} epochs: {_summarise(analysis)}")
     vetted = [c for c in analysis.transients if "bogus" not in c.flags]
@@ -357,6 +364,42 @@ def cmd_vet(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_alerts(args: argparse.Namespace) -> int:
+    """Read alert files, or draft a TNS report from one alert."""
+    from ..alerts import draft_tns_report, read_alerts, schema_of, write_tns_draft
+
+    if args.alerts_command == "read":
+        for path in _expand(args.files):
+            schema = schema_of(path)
+            _, packets = read_alerts(path)
+            print(f"{path}: {len(packets)} alerts, schema {schema.get('name')} "
+                  f"({len(schema.get('fields', []))} fields)")
+            for packet in packets[:args.limit]:
+                print("  " + packet.summary())
+            if len(packets) > args.limit:
+                print(f"  ... {len(packets) - args.limit} more")
+        return 0
+    if args.alerts_command == "tns":
+        _, packets = read_alerts(args.file)
+        chosen = [p for p in packets if args.candid is None or p.candid == args.candid]
+        if not chosen:
+            log.error("no alert with candid %s in %s", args.candid, args.file)
+            return 1
+        if len(chosen) > 1 and args.candid is None:
+            log.error("%d alerts in the file; choose one with --candid", len(chosen))
+            return 1
+        report = draft_tns_report(chosen[0], reporter=args.reporter,
+                                  reporting_group_id=args.group, data_source_id=args.source,
+                                  instrument_id=args.instrument, at_type=args.type,
+                                  remarks=args.remarks or "")
+        path = write_tns_draft(report, args.out)
+        print(f"TNS draft written to {path} (not submitted)")
+        for item in report["_todo"]:
+            print(f"  to do: {item}")
+        return 0
+    return 1
+
+
 def cmd_info(args: argparse.Namespace) -> int:
     """Report the installed version and which optional backends are present."""
     print(BANNER)
@@ -408,6 +451,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     series = subparsers.add_parser("series",
                                    help="analyse a multi-epoch series for transients")
+    series.add_argument("--alerts", help="also write the transient candidates as Avro alerts")
     series.add_argument("images", nargs="+", help="epoch files, in any order")
     series.add_argument("--name", help="name for the series")
     series.add_argument("--top", type=int, default=10,
@@ -483,6 +527,24 @@ def build_parser() -> argparse.ArgumentParser:
     vet.add_argument("--no-browser", action="store_true", help="do not open a browser")
     add_common(vet)
     vet.set_defaults(func=cmd_vet)
+
+    alerts = subparsers.add_parser("alerts", help="read Avro alert files; draft TNS reports")
+    alerts_sub = alerts.add_subparsers(dest="alerts_command", required=True)
+    alerts_read = alerts_sub.add_parser("read", help="summarise alerts in Avro files")
+    alerts_read.add_argument("files", nargs="+")
+    alerts_read.add_argument("--limit", type=int, default=20)
+    alerts_tns = alerts_sub.add_parser("tns", help="draft a TNS report for one alert (never sent)")
+    alerts_tns.add_argument("file")
+    alerts_tns.add_argument("--reporter", required=True, help="your name, as the TNS will show it")
+    alerts_tns.add_argument("--candid", type=int, help="which alert, when the file holds several")
+    alerts_tns.add_argument("--out", default="tns_draft.json")
+    alerts_tns.add_argument("--group", type=int, default=0, help="TNS reporting group id")
+    alerts_tns.add_argument("--source", type=int, default=0, help="TNS data source id")
+    alerts_tns.add_argument("--instrument", type=int, default=0, help="TNS instrument id")
+    alerts_tns.add_argument("--type", default="other", help="other, supernova, nova, agn, tde, fbot")
+    alerts_tns.add_argument("--remarks")
+    for sub in (alerts_read, alerts_tns):
+        sub.set_defaults(func=cmd_alerts)
 
     info = subparsers.add_parser("info", help="show version and available backends")
     info.set_defaults(func=cmd_info)
