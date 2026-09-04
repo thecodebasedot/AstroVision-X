@@ -347,9 +347,11 @@ nothing about the field.
 own measured noise.
 
 **Result.** Errors scale with noise as they should; at 6× the noise every
-statistic's error grows by roughly 6×. The bootstrap also measures a **+0.13
-noise bias in asymmetry**, which is real: asymmetry is built from absolute
-differences, so noise pushes it up whichever way it goes.
+statistic's error grows by roughly 6×. The bootstrap once measured a
+**+0.13 noise bias in asymmetry** and this document called it real. It was
+a missing sky term, found by the statmorph comparison below (*Agreement
+with statmorph*); the corrected statistic has no bias and the bootstrap
+test now asserts that.
 
 Sérsic parameter errors come from the curvature at the solution, scaled by
 the achieved chi-squared. On simulator galaxies the median error on *n* is
@@ -1133,6 +1135,68 @@ code to 4 × 10⁻¹⁶ relative, checked over circles, ellipses, masks, edge
 positions and NaNs.
 
 Tests: `tests/test_benchmark.py` (skipped where the tools are not installed).
+
+## Agreement with statmorph
+
+statmorph (Rodriguez-Gomez et al. 2019) is the reference implementation of
+the non-parametric morphology statistics. It was run on the same
+background-subtracted pixels, segmentation map and PSF as this package's
+morphology stage, on two 512² fields with 45 galaxies each, and each
+statistic compared source by source (statmorph's own unreliable-flagged
+sources left out):
+
+| Statistic | n | ours − theirs, median | scatter | rank correlation |
+| --- | --- | --- | --- | --- |
+| Gini | 56, 68 | +0.001, −0.003 | 0.016, 0.011 | 0.70, 0.82 |
+| M20 | 56, 68 | 0.000, 0.000 | 0.043, 0.033 | 0.90, 0.87 |
+| Concentration | 76, 93 | +0.06, +0.08 | 0.15, 0.25 | 0.59, 0.72 |
+| Asymmetry, before | 56, 68 | +0.17, +0.15 | 0.23, 0.19 | **−0.79, −0.86** |
+| Asymmetry, after | 56, 68 | +0.09, +0.08 | 0.10, 0.08 | 0.67, 0.59 |
+| Smoothness, before | 56, 68 | +0.51, +0.57 | 0.19, 0.18 | −0.27, −0.31 |
+| Smoothness, after | 56, 68 | +0.03, +0.02 | 0.04, 0.04 | −0.06, −0.24 |
+| Sérsic n | 43, 53 | +0.09, +0.01 | 0.9, 2.1 | 0.33, 0.29 |
+| Effective radius | 43, 53 | +0.15, +0.05 px | 2.1, 1.5 px | 0.78, 0.85 |
+
+Gini and M20 agree to a few hundredths: the same definition on the same
+pixels. Concentration differs by the apertures each code uses (statmorph's
+circular Petrosian ellipse to 1.5 r_p, this package's curve of growth) and
+agrees to within its scatter.
+
+**Asymmetry was measuring noise.** The uncorrected statistic *anticorrelated*
+with statmorph's. Asymmetry is built from absolute differences, so noise
+adds ``|n − n′|`` to every pixel whichever way it goes and the number grows
+as S/N falls; faint smooth galaxies ranked above bright disturbed ones. The
+validation notes had recorded a "+0.13 noise bias" as a property of the
+statistic. It was a missing term: Conselice (2003) subtracts the asymmetry
+of the sky, statmorph does, and this package now does — the mean
+``|B − B_180|`` over sky pixels times the footprint's pixel count, over the
+same ``Σ|I|``. The normalisation was also changed to statmorph's (no factor
+of two). Rank correlation went from −0.8 to +0.6, the offset halved and the
+scatter halved. The bootstrap test that asserted the bias now asserts its
+absence, and that the raw statistic still has it.
+
+**Smoothness had the same defect and a wrong definition.** It took the
+absolute residual after a Gaussian blur of 5 % of the stamp over the whole
+footprint. It now follows Lotz et al. (2004) and statmorph: a boxcar of
+0.25 r_petro, positive residuals only, an annulus from 0.25 to 1.5 r_petro,
+sky term subtracted. The offset fell from +0.5 to +0.03. The rank
+correlation stayed near zero, and that is the simulator: its galaxies are
+smooth Sérsic profiles with no clumps, so on these fields S has no signal in
+either code and two noise measurements do not correlate. A clumpy galaxy is
+what would test it, and the simulator does not make one.
+
+**Sérsic index.** Both codes err by 0.5–0.9 in n against the simulator's
+truth (ours 0.77 and 0.71, statmorph 0.51 and 0.90) with a scatter between
+them of 1–2. Neither is well determined at this depth, which is the finding
+the degenerate-fit flag already recorded.
+
+statmorph takes 25–29 s on these fields against 3 s for this package, most
+of it in its Sérsic and double-Sérsic fits.
+
+**SExtractor.** The SExtractor binary is not installed here; SEP, its
+library form, is the comparison recorded above under photutils and SEP.
+
+Tests: `tests/test_morphology_benchmark.py` (skipped without statmorph).
 
 ## Tiled processing
 

@@ -26,7 +26,7 @@ ml = ["scikit-learn>=1.0"]
 deep = ["torch>=2.0"]
 viz = ["matplotlib>=3.5"]
 all = ["scipy>=1.7", "astropy>=5.0", "scikit-learn>=1.0", "matplotlib>=3.5"]
-benchmark = ["photutils>=1.8", "sep>=1.2", "astropy>=5.0"]
+benchmark = ["photutils>=1.8", "sep>=1.2", "astropy>=5.0", "statmorph>=0.5"]
 alerts = ["fastavro>=1.8"]
 dev = ["pytest>=7.0", "pytest-cov"]
 

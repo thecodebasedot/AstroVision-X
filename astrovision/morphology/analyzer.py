@@ -87,9 +87,18 @@ class MorphologyAnalyzer:
             if cfg.compute_cas:
                 # Concentration already comes from the photometry stage's
                 # curve of growth, so only A and S are computed here.
-                result = asymmetry(cut, centre, footprint)
+                # Sky for the noise corrections: outside the object and not
+                # a neighbour that was replaced with zeros.
+                sky = None
+                if footprint is not None:
+                    sky = ~footprint
+                    if fit_region is not None:
+                        sky = sky & fit_region
+                result = asymmetry(cut, centre, footprint, sky_mask=sky)
                 source.morphology.asymmetry = result["asymmetry"]
-                result_s = smoothness(cut, centre=centre, mask=footprint)
+                extras["asymmetry_sky"] = result["asymmetry_sky"]
+                result_s = smoothness(cut, centre=centre, mask=footprint, sky_mask=sky,
+                                      petrosian_radius=source.photometry.petrosian_radius)
                 source.morphology.smoothness = result_s["smoothness"]
                 extras.update(result_s)
 

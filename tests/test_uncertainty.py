@@ -52,18 +52,23 @@ class TestBootstrapErrors:
         for name in ("concentration", "asymmetry", "gini", "m20"):
             assert loud.error(name) > quiet.error(name)
 
-    def test_reports_the_upward_noise_bias_of_asymmetry(self):
-        """Asymmetry is built from absolute differences, so noise pushes it up
-        whichever way the noise happens to go."""
+    def test_the_sky_correction_removes_the_noise_bias_of_asymmetry(self):
+        """Asymmetry is built from absolute differences, so noise pushed it up
+        whichever way the noise went: a +0.13 bias, once recorded here as
+        real. Subtracting the sky's own asymmetry (Conselice 2003, as
+        statmorph does) removes it: adding more noise no longer raises A."""
         truth = _galaxy()
         noisy = truth + np.random.default_rng(3).normal(0, 10.0, truth.shape)
         centre = ((truth.shape[1] - 1) / 2.0, (truth.shape[0] - 1) / 2.0)
         errors = bootstrap_morphology(noisy, 10.0, centre=centre, n_samples=16, seed=5)
-        # Adding more noise to an already noisy image raises asymmetry again.
         from astrovision.morphology.cas import asymmetry
 
         measured = float(asymmetry(noisy, centre)["asymmetry"])
-        assert errors.bias("asymmetry", measured) > 0
+        assert abs(errors.bias("asymmetry", measured)) < 0.05
+        # and the raw, uncorrected statistic still shows the bias it always had
+        raw_clean = asymmetry(truth, centre)["asymmetry_raw"]
+        raw_noisy = asymmetry(noisy, centre)["asymmetry_raw"]
+        assert raw_noisy > raw_clean + 0.05
 
     def test_refuses_without_a_noise_estimate(self):
         errors = bootstrap_morphology(_galaxy(), float("nan"))

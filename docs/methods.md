@@ -147,8 +147,15 @@ faint; with it, within 3 %.
 **CAS** (Conselice 2003). *Concentration* `C = 5 log₁₀(r₈₀/r₂₀)` is about 5 for
 a de Vaucouleurs bulge and 2.7 for an exponential disc. *Asymmetry* is the
 residual after a 180° rotation, with the rotation centre minimised because the
-result is very sensitive to mis-centring. *Smoothness* is the fraction of light
-in high spatial frequencies, with the intrinsically sharp nucleus excluded.
+result is very sensitive to mis-centring, and with the asymmetry of the sky
+subtracted, because noise contributes an absolute difference to every pixel
+whichever way it goes: without that term the statistic ranks faint smooth
+galaxies above bright disturbed ones, which the statmorph comparison in
+`validation.md` caught as a rank correlation of −0.8. *Smoothness* is the
+light in structure smaller than a quarter of the Petrosian radius — a boxcar
+smoothing, positive residuals only, an annulus that excludes the sharp
+nucleus, sky term subtracted — following Lotz et al. (2004). Both are
+normalised as statmorph normalises them, so the numbers are comparable.
 
 **Gini and M₂₀** (Lotz 2004, 2008). Gini measures how unequally light is
 distributed among an object's pixels; M₂₀ measures how far the brightest fifth

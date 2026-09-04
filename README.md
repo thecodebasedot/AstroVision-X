@@ -244,6 +244,8 @@ bad columns. They are *not* claims about real survey data.
 | Catalog database, 500k detections | cone search 2.5 ms at 5″, object history 0.13 ms |
 | Avro alert codec (stdlib) | byte-for-byte interchange with fastavro, both directions |
 | HEALPix index | exact agreement with healpy, nside 1 to 256 |
+| Gini and M20 vs statmorph | 0.01–0.04 scatter, rank correlation 0.7–0.9 |
+| Asymmetry vs statmorph | rank correlation −0.8 → +0.6 after the sky correction |
 | Photometric redshift (3 filters) | scatter 0.043, 22 % outliers — the filter count dominates |
 | Galaxy morphology (5 classes) | 59 % exact, 78 % at family level |
 | Transient recall | 12/14, with 2 spurious over five fields |
