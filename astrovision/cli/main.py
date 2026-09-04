@@ -119,6 +119,14 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         print(f"\n{path}: {_summarise(analysis)}")
         for kind, written_path in sorted(written.items()):
             print(f"  {kind:<14} {written_path}")
+        if getattr(args, "db", None):
+            from ..catalog import CatalogDB, ingest_analysis
+
+            with CatalogDB(args.db) as db:
+                stored = ingest_analysis(db, analysis, image)
+            print(f"  {'database':<14} {args.db}: field {stored.field_id}, "
+                  f"{stored.n_detections} detections, {stored.n_matched} matched to known "
+                  f"objects, {stored.n_new_objects} new")
         if analysis.warnings:
             print("  warnings:")
             for warning in analysis.warnings:
@@ -260,6 +268,58 @@ def cmd_config(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_db(args: argparse.Namespace) -> int:
+    """Query or fill the catalog database."""
+    from ..catalog import CatalogDB
+
+    with CatalogDB(args.database) as db:
+        if args.db_command == "info":
+            counts = db.counts()
+            print(f"{args.database}: {counts['fields']} fields, {counts['detections']} "
+                  f"detections, {counts['objects']} objects")
+            for row in db.fields():
+                print(f"  field {row['id']:<5} {row['name']:<30} band={row['band']} "
+                      f"mjd={row['mjd']} sources={row['n_sources']} "
+                      f"key={row['reproducibility_key']}")
+            return 0
+        if args.db_command == "ingest":
+            from ..io.catalog import read_catalog
+
+            for path in _expand(args.catalogs):
+                catalog = read_catalog(path)
+                report = db.ingest(catalog, name=args.name or os.path.basename(path),
+                                   band=args.band, mjd=args.mjd, path=path)
+                print(f"{path}: field {report.field_id}, {report.n_detections} detections, "
+                      f"{report.n_matched} matched, {report.n_new_objects} new objects "
+                      f"({report.seconds:.2f}s)")
+                for note in report.notes:
+                    print(f"  note: {note}")
+            return 0
+        if args.db_command == "cone":
+            rows = db.cone_search(args.ra, args.dec, args.radius, table=args.table,
+                                 limit=args.limit)
+            print(f"{len(rows)} {args.table} within {args.radius:g}\" of "
+                  f"({args.ra:.6f}, {args.dec:.6f})")
+            for row in rows:
+                if args.table == "detections":
+                    print(f"  {row['separation_arcsec']:6.2f}\"  object {row['object_id']}  "
+                          f"field {row['field_name']}  mjd {row['mjd']}  band {row['band']}  "
+                          f"flux {row['flux']}  mag {row['mag']}  class {row['class']}")
+                else:
+                    print(f"  {row['separation_arcsec']:6.2f}\"  object {row['id']}  "
+                          f"{row['n_detections']} detections  mjd {row['first_mjd']}-"
+                          f"{row['last_mjd']}  bands {row['bands']}")
+            return 0
+        if args.db_command == "history":
+            rows = db.history(args.object)
+            print(f"object {args.object}: {len(rows)} detections")
+            for row in rows:
+                print(f"  mjd {row['mjd']}  band {row['band']}  flux {row['flux']} "
+                      f"+/- {row['flux_err']}  mag {row['mag']}  field {row['field_name']}")
+            return 0
+    return 1
+
+
 def cmd_info(args: argparse.Namespace) -> int:
     """Report the installed version and which optional backends are present."""
     print(BANNER)
@@ -305,6 +365,7 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("images", nargs="+", help="FITS or image files")
     analyze.add_argument("--print-report", action="store_true",
                          help="print the text report to stdout as well")
+    analyze.add_argument("--db", help="also store the catalog in this SQLite database")
     add_common(analyze)
     analyze.set_defaults(func=cmd_analyze)
 
@@ -351,6 +412,26 @@ def build_parser() -> argparse.ArgumentParser:
     config_parser.add_argument("--list-presets", action="store_true")
     add_common(config_parser)
     config_parser.set_defaults(func=cmd_config)
+
+    db = subparsers.add_parser("db", help="the catalog database: ingest, cone search, history")
+    db.add_argument("database", help="SQLite file (created if missing)")
+    db_sub = db.add_subparsers(dest="db_command", required=True)
+    db_info = db_sub.add_parser("info", help="counts and the fields stored")
+    db_ingest = db_sub.add_parser("ingest", help="store exported catalogs (csv/json)")
+    db_ingest.add_argument("catalogs", nargs="+")
+    db_ingest.add_argument("--name", help="field name (default: the file name)")
+    db_ingest.add_argument("--band")
+    db_ingest.add_argument("--mjd", type=float)
+    db_cone = db_sub.add_parser("cone", help="everything within a radius of a position")
+    db_cone.add_argument("ra", type=float, help="degrees")
+    db_cone.add_argument("dec", type=float, help="degrees")
+    db_cone.add_argument("radius", type=float, help="arcseconds")
+    db_cone.add_argument("--table", choices=["detections", "objects"], default="detections")
+    db_cone.add_argument("--limit", type=int)
+    db_history = db_sub.add_parser("history", help="every detection of one object")
+    db_history.add_argument("object", type=int)
+    for sub in (db_info, db_ingest, db_cone, db_history):
+        sub.set_defaults(func=cmd_db)
 
     info = subparsers.add_parser("info", help="show version and available backends")
     info.set_defaults(func=cmd_info)

@@ -1153,6 +1153,62 @@ does not fit.
 
 Tests: `tests/test_tiles.py`.
 
+## The catalog database
+
+**The HEALPix index.** Checked pixel for pixel against healpy (`ang2pix`
+and `pix2ang`, nested, at nside 1, 8 and 256 on 50 000 random positions:
+exact agreement), and against HEALPix's own properties where healpy is not
+installed: every pixel round-trips through its centre at nside 1 to 32;
+400 000 uniform positions fill the 192 pixels of nside 4 to within 5 σ of
+equal; every position lies within 1.5 pixel sides of its pixel centre; the
+pixel at nside 64 is a child of the pixel at nside 32. A cone query, coarse
+or refined to nside 8192, contains the pixel of every point inside the cone
+on four positions including the pole and the RA seam, and a 5-arcsecond
+cone refines to at most 16 fine pixels.
+
+**Object association.** A second epoch of the same 60 positions, jittered
+by 0.3 arcseconds, links every detection to its object and founds none; a
+position moved by 5 arcseconds founds a new one; of two objects 2
+arcseconds apart, a detection 1.6 arcseconds from one and 0.4 from the other
+goes to the nearer. NaN measurements are stored as NULL. The field row
+carries the run's reproducibility key.
+
+**Cost at survey scale.** Twenty overlapping 0.5° fields of 5000 sources,
+five epochs each, 500 000 detections and 100 401 objects in an 80 MB file:
+
+| Operation | Time |
+| --- | --- |
+| Ingest, first epoch of a 5000-source field | 320 ms (15 700 rows/s) |
+| Ingest, later epoch with association | 460 ms |
+| Cone search, 5″ (5 rows) | 2.5 ms |
+| Cone search, 30″ (43 rows) | 3.7 ms |
+| Cone search, 2′ (716 rows) | 23 ms |
+| Cone search, 10′ (9 851 rows) | 265 ms, mostly building the rows |
+| History of one object | 0.13 ms |
+| Objects ranked by detections | 9 ms |
+
+The first version of the cone search took 2–5 seconds: it planned every
+cone at a fixed 0.46° pixel, so a 5-arcsecond query fetched the 26 000 rows
+of that pixel and converted each to a dictionary before discarding them.
+The cone is now refined hierarchically to a resolution matched to its
+radius, and rows are converted only after the exact separation cut.
+
+**A limit, measured.** In the overlaps between fields, 893 of 400 000
+repeat-epoch detections (0.2 %) founded a new object instead of linking to
+their own, because a *different* object from the neighbouring field lay
+within 1.5 arcseconds and had claimed the position first. Object identity
+here is positional; at that density it is ambiguous 0.2 % of the time, and
+the store does not pretend otherwise.
+
+**A defect the database found elsewhere.** Re-ingesting a field from its
+own exported CSV linked only 21 of 26 sources; the other five sat 1.5–1.8
+arcseconds from their twins. The CSV writer formatted every float with six
+significant digits, so a right ascension of 149.999 degrees was written to
+0.001 degrees, 3.6 arcseconds. It now writes ten, and a test round-trips a
+position through CSV to a milliarcsecond.
+
+Tests: `tests/test_healpix.py`, `tests/test_catalog_db.py`.
+
 ## Reproducibility
 
 The manifest records the configuration hash, package version, git revision

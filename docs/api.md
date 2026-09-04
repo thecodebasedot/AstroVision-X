@@ -474,6 +474,32 @@ Needs `pip install -e ".[benchmark]"`. The comparison is on the same pixels,
 the same threshold and the same aperture; the measured agreement is in
 [`validation.md`](validation.md).
 
+## A catalog across fields and epochs
+
+```python
+from astrovision.catalog import CatalogDB, ingest_analysis
+
+with CatalogDB("survey.sqlite") as db:                 # SQLite: stdlib, NumPy-only
+    report = ingest_analysis(db, analysis, image)      # or db.ingest(catalog, name=, band=, mjd=)
+    report.n_matched, report.n_new_objects             # linked to known objects / founded new ones
+
+    db.cone_search(150.1, 2.2, radius_arcsec=30)       # every detection, nearest first
+    db.cone_search(150.1, 2.2, 30, table="objects")    # distinct sky objects instead
+    db.history(object_id)                              # its detections across fields, in time order
+    mjd, flux, err = db.light_curve(object_id, band="r")
+    db.objects_with_history(min_detections=3)          # most-seen objects first
+    db.field_catalog(field_id)                         # back as a SourceCatalog
+    db.fields(); db.counts()
+```
+
+Every row carries a nested HEALPix index (`astrovision.catalog.healpix`,
+pure NumPy, checked against healpy). Ingest links each detection to an
+existing object within the match radius (1.5 arcseconds by default) or
+founds a new one; a cone search is a handful of index ranges. The command
+line does the same: `astrovision analyze image.fits --db survey.sqlite`,
+then `astrovision db survey.sqlite cone RA DEC RADIUS`,
+`astrovision db survey.sqlite history OBJECT`, `astrovision db survey.sqlite info`.
+
 ## Reproducing a run
 
 ```python

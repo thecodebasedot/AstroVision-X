@@ -202,3 +202,20 @@ class TestCatalogIO:
     def test_unsupported_format_raises(self, tmp_path):
         with pytest.raises(DataError):
             catalog_io.write_catalog(self._catalog(), str(tmp_path / "c.xyz"))
+
+
+class TestCatalogPrecision:
+    def test_sky_coordinates_survive_a_csv_round_trip(self, tmp_path):
+        """Six significant digits, the old format, put 149.999 deg 3.6
+        arcseconds from the truth; the catalog database found five of 26
+        re-ingested sources beyond its 1.5-arcsecond match radius."""
+        from astrovision.core.types import BoundingBox, Source, SourceCatalog
+        from astrovision.io.catalog import read_catalog, write_catalog
+
+        catalog = SourceCatalog([Source(id=1, x=1.0, y=2.0, bbox=BoundingBox(0, 0, 1, 1),
+                                        ra=149.99932455336682, dec=2.1919846812237065)])
+        path = str(tmp_path / "c.csv")
+        write_catalog(catalog, path)
+        back = read_catalog(path)[0]
+        assert abs(back.ra - 149.99932455336682) * 3600 < 0.001
+        assert abs(back.dec - 2.1919846812237065) * 3600 < 0.001

@@ -1144,6 +1144,49 @@ tile measured it and how far from that tile's edge, and the whole thing is
 measured against the whole-image catalog on a frame small enough to do both
 (`validation.md`). Peak memory is the size of one tile, not the frame.
 
+## A catalog that remembers
+
+A CSV per image answers "what was in this image". A survey asks what is at
+*this position* in every image ever taken of it, and how *this object* has
+behaved over the year. Those need one store across fields and epochs,
+indexed by sky position, with a notion of an object that persists between
+detections. That is `catalog.database`: SQLite, because it is in the
+standard library and the package promises to run on NumPy alone; three
+tables, fields, detections and objects; and a HEALPix index on every row.
+
+**HEALPix, in NumPy.** The sphere is cut into twelve base faces and each
+into nside² equal-area pixels. In the *nested* numbering a pixel's index
+interleaves the bits of its position inside the face, so the four children
+of a pixel at one resolution are four consecutive integers at the next and a
+coarse pixel is a contiguous range of fine ones. That is what a database
+index wants: a cone on the sky becomes a few `BETWEEN` ranges. The
+implementation (`catalog.healpix`) follows the reference algorithms and is
+checked pixel for pixel against healpy where healpy is installed, and
+against HEALPix's own properties -- equal areas, hierarchy, round trips --
+where it is not.
+
+**Object identity is positional, and says so.** On ingest each detection
+with sky coordinates is linked to an existing object within the match radius
+(1.5 arcseconds by default) or founds a new one. The association is
+vectorised: candidate pairs come from a sorted-pixel join over the
+detection's own 26-arcsecond pixel and the pixels of a ring of points around
+it, and the exact separation is computed only for candidates. What this
+cannot know is whether two things at the same position are the same thing.
+In a crowded overlap of two fields, different objects fall within 1.5
+arcseconds of each other and are linked; an object whose measured position
+wanders more than that -- a fast mover, a poor astrometric solution --
+becomes several. The moving-object stage links tracklets on its own terms;
+this store keeps a history per position, and a history is what a light
+curve is.
+
+**What is kept.** Each field row carries the run's manifest and
+reproducibility key, so every detection traces to the code and
+configuration that made it. Each detection carries the flat export schema
+with NaN stored as NULL. Each object carries its founding position, its
+detection count, first and last epoch and the bands it was seen in. The
+measured cost of all this is in `validation.md`: ingest rates, cone-search
+and history times at half a million rows.
+
 ## Writing down what produced the result
 
 A catalog without its provenance is a number without a unit. The question

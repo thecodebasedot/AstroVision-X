@@ -241,6 +241,8 @@ bad columns. They are *not* claims about real survey data.
 | Agreement with photutils and SEP | 0.06–0.08 px, 0.2–0.3 % in flux where both detect |
 | Tiled vs whole-image catalog | 0.002 px, 0.1–1 % in flux, memory 191 → 23 MB |
 | Aperture photometry, 4096² frame | 1817 ms → 0.31 ms per aperture, identical to 4 × 10⁻¹⁶ |
+| Catalog database, 500k detections | cone search 2.5 ms at 5″, object history 0.13 ms |
+| HEALPix index | exact agreement with healpy, nside 1 to 256 |
 | Photometric redshift (3 filters) | scatter 0.043, 22 % outliers — the filter count dominates |
 | Galaxy morphology (5 classes) | 59 % exact, 78 % at family level |
 | Transient recall | 12/14, with 2 spurious over five fields |
@@ -395,7 +397,15 @@ catalog = result.catalog                                 # a 16k frame in 2k til
 The data-quality plane becomes the mask, the weight plane becomes the noise
 model, pixels already in electrons are recognised so the gain is not applied
 twice, and a frame too large to hold in memory several times over is processed
-in overlapping tiles and merged into one catalog. Every run carries a manifest
+in overlapping tiles and merged into one catalog. Add `--db survey.sqlite`
+to `astrovision analyze` and every field's catalog goes into one SQLite
+store with a HEALPix sky index, where detections of the same position across
+fields and epochs are linked into objects with histories:
+
+```bash
+astrovision db survey.sqlite cone 150.1 2.2 30      # everything within 30" of a position
+astrovision db survey.sqlite history 1234           # one object's detections over time
+``` Every run carries a manifest
 (configuration hash, code revision, dependency versions, seeds, input
 checksums) and a digest of its catalog, so a repeat run can be checked against
 it. With `pip install -e ".[benchmark]"` the catalog can be compared with
