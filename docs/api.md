@@ -290,6 +290,22 @@ self-training. `select_for_review` defaults to `random` because that is what
 measured best — uncertainty sampling lost at three of four budgets and spent
 its labels on the majority class. See `docs/validation.md`.
 
+## Vetting: where the astronomer decides
+
+```python
+from astrovision.vetting import build_queue, serve
+
+queue = build_queue(analysis, image, limit=40,        # the ranked candidates, with cutouts
+                    include_sources=False, db=db)     # db: a CatalogDB, for histories
+serve(queue, log_path="verdicts.json", port=8765)     # local page; Ctrl-C to stop
+```
+
+Keys on the page: **R** real, **B** bogus, **U** unsure, **S** skip,
+**←** previous, **/** note. A verdict is refused without a reviewer's name
+and is appended to the active-learning `VerdictLog` with the model's own
+label and confidence beside it. From the command line:
+`astrovision vet image.fits --log verdicts.json [--db survey.sqlite] [--all-sources]`.
+
 ## Learning from unlabelled cutouts
 
 ```python

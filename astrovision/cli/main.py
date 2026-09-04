@@ -320,6 +320,43 @@ def cmd_db(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_vet(args: argparse.Namespace) -> int:
+    """Analyse an image and open the vetting page for its candidates."""
+    from ..engine import Pipeline
+    from ..io.image import AstroImage
+    from ..vetting import build_queue, serve
+
+    from ..preprocess import Preprocessor
+
+    config = _load_config(args)
+    image = AstroImage.load(args.image)
+    log.info("analysing %s for vetting", args.image)
+    # Preprocess here rather than inside the pipeline so the cleaned image,
+    # with its background model, is the one the cutouts are cut from: the
+    # page then shows the background-subtracted stamp beside the raw one.
+    clean = Preprocessor(config.preprocess).run(image)
+    analysis = Pipeline(config).run(clean, redshift=args.redshift, preprocess=False)
+    image = clean
+    db = None
+    if args.db:
+        from ..catalog import CatalogDB, ingest_analysis
+
+        db = CatalogDB(args.db)
+        stored = ingest_analysis(db, analysis, image)
+        print(f"stored in {args.db}: field {stored.field_id}, {stored.n_detections} "
+              f"detections, {stored.n_matched} matched, {stored.n_new_objects} new")
+    queue = build_queue(analysis, image, limit=args.limit, include_sources=args.all_sources,
+                        db=db)
+    if len(queue) == 0:
+        print("nothing to vet: no candidates and --all-sources not given")
+        return 0
+    print(f"{len(queue)} items to vet; verdicts go to {args.log}")
+    print(f"open http://{args.host}:{args.port}/  (Ctrl-C to stop)")
+    serve(queue, log_path=args.log, host=args.host, port=args.port,
+          open_browser=not args.no_browser, block=True)
+    return 0
+
+
 def cmd_info(args: argparse.Namespace) -> int:
     """Report the installed version and which optional backends are present."""
     print(BANNER)
@@ -432,6 +469,20 @@ def build_parser() -> argparse.ArgumentParser:
     db_history.add_argument("object", type=int)
     for sub in (db_info, db_ingest, db_cone, db_history):
         sub.set_defaults(func=cmd_db)
+
+    vet = subparsers.add_parser("vet", help="open a page to record verdicts on the candidates")
+    vet.add_argument("image", help="FITS or image file to analyse and vet")
+    vet.add_argument("--log", default="verdicts.json",
+                     help="append-only verdict log (default: verdicts.json)")
+    vet.add_argument("--limit", type=int, default=40, help="how many ranked candidates")
+    vet.add_argument("--all-sources", action="store_true",
+                     help="queue every catalog source after the candidates")
+    vet.add_argument("--db", help="also store the catalog here and show object histories")
+    vet.add_argument("--host", default="127.0.0.1")
+    vet.add_argument("--port", type=int, default=8765)
+    vet.add_argument("--no-browser", action="store_true", help="do not open a browser")
+    add_common(vet)
+    vet.set_defaults(func=cmd_vet)
 
     info = subparsers.add_parser("info", help="show version and available backends")
     info.set_defaults(func=cmd_info)

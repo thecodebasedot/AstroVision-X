@@ -413,6 +413,21 @@ photutils and SEP on the same pixels.
 
 ---
 
+## Vetting
+
+```bash
+astrovision vet field.fits --log verdicts.json --db survey.sqlite
+```
+
+opens a local page that shows the ranked candidates one at a time, with the
+cutout, the background-subtracted cutout, the pipeline's evidence and caveats
+and the object's history across epochs. One key records a verdict under the
+reviewer's name, next to what the model said, into the same append-only log
+the active-learning loop trains from. No name, no verdict: this is the
+boundary the whole project keeps, implemented as a refused request.
+
+---
+
 ## Documentation
 
 - [`docs/architecture.md`](docs/architecture.md) — how the stages fit together

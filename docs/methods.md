@@ -862,6 +862,32 @@ labels standing in for the astronomer. That oracle is instant, always right
 and always decisive, and a real reviewer is none of those, so these curves are
 the best case for every strategy alike.
 
+### Where the decision is made
+
+The log described above had no front door: a verdict could only be added
+from Python. `vetting` is that door -- a page served on localhost by the
+standard library, no framework and no network, that shows one candidate at
+a time and turns a keystroke into a :class:`HumanVerdict`.
+
+What it shows is chosen for a decision that takes seconds: the cutout under
+an asinh stretch about the stamp's own sky, the background-subtracted
+cutout beside it, the pipeline's verdict and the reasons and caveats it
+attached, the evidence numbers behind the rank, the source's measurements,
+and -- when the catalog database is given -- every detection of that
+position across epochs, drawn as a light curve. The stretch and the PNG
+are written by hand so the page runs where the package runs, on NumPy
+alone.
+
+What it enforces is the boundary. A verdict without a reviewer's name is
+refused by the server, not merely discouraged by the page, because an
+anonymous decision cannot be told from the model's output and training on
+it would be self-training. Verdicts are appended, never overwritten; a
+reviewer who changes their mind adds a second record, and two reviewers
+who disagree are surfaced as a count on the page rather than averaged.
+Each verdict carries what the model had said, so the log can answer the
+question that matters for calibration: how often did a person overrule a
+model that was over 0.9 confident?
+
 ## Learning without labels
 
 Labels are the scarce resource. A survey produces millions of cutouts a night

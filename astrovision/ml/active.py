@@ -76,6 +76,11 @@ class HumanVerdict:
     model_verdict: str = ""                 # the pipeline's recommendation
     note: str = ""
     timestamp: float = field(default_factory=time.time)
+    #: What kind of thing was judged (transient, lens, anomaly, source) and
+    #: the candidate it came from, when the verdict is about a candidate
+    #: rather than a catalog source. Optional so older logs still load.
+    kind: str = ""
+    candidate_id: Optional[int] = None
 
     def agrees_with_model(self) -> bool:
         return bool(self.model_label) and self.label == self.model_label

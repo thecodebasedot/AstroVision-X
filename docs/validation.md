@@ -828,6 +828,25 @@ actually meet.
 
 Tests: `tests/test_active.py`.
 
+## Vetting
+
+Tested through the HTTP API, not by hand: the page is served, the next
+item for a reviewer is the first they have not decided, a cutout comes back
+as a 256 × 256 PNG whose header and inflated payload have the right sizes,
+a verdict posted with a name lands in the log with the model's label beside
+it and advances the queue, a verdict posted without a name is refused with
+400 and nothing is written, and when every item is decided the queue
+returns empty. Verdicts are appended: three verdicts on one item from two
+reviewers are three records and one disagreement. Old logs without the new
+``kind`` and ``candidate_id`` fields still load. The asinh stretch maps a
+5000-count star to white and a 6 σ source to visibly above sky, with the
+sky itself mid-grey rather than black.
+
+**Not measured:** whether the page makes astronomers faster or more
+consistent. That needs astronomers.
+
+Tests: `tests/test_vetting.py`.
+
 ## Learning without labels
 
 **Setup.** 764 unlabelled stamps for contrastive pretraining, 210 labelled for
