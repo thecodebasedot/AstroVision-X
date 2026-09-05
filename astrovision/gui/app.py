@@ -594,6 +594,8 @@ def _handler_for(app: App):
             try:
                 if not parts:
                     self._send(200, PAGE.encode("utf-8"), "text/html; charset=utf-8")
+                elif parts == ["favicon.ico"]:
+                    self._send(204, b"", "image/x-icon")
                 elif parts[0] != "api":
                     self._json(404, {"error": "not found"})
                 elif parts[1] == "status":
