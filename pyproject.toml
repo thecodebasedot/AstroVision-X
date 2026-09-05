@@ -33,6 +33,7 @@ dev = ["pytest>=7.0", "pytest-cov"]
 [project.scripts]
 astrovision = "astrovision.cli.main:main"
 avx = "astrovision.cli.main:main"
+astrovision-gui = "astrovision.gui.app:main"
 
 [tool.setuptools.packages.find]
 include = ["astrovision*"]

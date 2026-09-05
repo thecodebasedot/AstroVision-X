@@ -105,9 +105,13 @@ class Pipeline:
     True
     """
 
-    def __init__(self, config: Optional[AstroVisionConfig] = None):
+    def __init__(self, config: Optional[AstroVisionConfig] = None,
+                 progress: Optional[Callable[[StageResult], None]] = None):
         self.config = config or AstroVisionConfig()
         self.stages: List[StageResult] = []
+        #: Called with a :class:`StageResult` as each stage starts
+        #: (``status == "running"``) and ends; a GUI's progress bar hangs on it.
+        self.progress = progress
         self.preprocessor = Preprocessor(self.config.preprocess)
         self.detector = Detector(self.config.detection)
         self.photometer = Photometer(self.config.photometry)
@@ -134,9 +138,11 @@ class Pipeline:
             result.status = "skipped"
             result.message = "disabled in configuration"
             self.stages.append(result)
+            self._notify(result)
             log.info("stage '%s' skipped (disabled)", name)
             return result
 
+        self._notify(StageResult(name=name, status="running"))
         start = time.perf_counter()
         try:
             result.detail = work() or {}
@@ -148,7 +154,17 @@ class Pipeline:
             log.exception("stage '%s' failed", name)
         result.seconds = time.perf_counter() - start
         self.stages.append(result)
+        self._notify(result)
         return result
+
+    def _notify(self, result: StageResult) -> None:
+        """Tell whoever is watching (a progress bar) where the run is."""
+        if self.progress is None:
+            return
+        try:
+            self.progress(result)
+        except Exception:                            # noqa: BLE001 - a watcher never stops the run
+            log.debug("progress callback failed", exc_info=True)
 
     def _reference_service(self):
         """The external-catalog backend, built once and shared.

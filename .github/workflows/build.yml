@@ -1,0 +1,77 @@
+name: Desktop builds
+
+# Standalone folders of the desktop application for Windows, macOS and
+# Linux, built with PyInstaller.  Each build runs its own self-test (a
+# simulated field through the whole pipeline) before it is uploaded, so an
+# artifact that exists is one that ran.  On a tag starting with "v" the
+# archives are attached to the GitHub release.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows
+            archive: AstroVision-X-windows-x64.zip
+          - os: macos-latest
+            name: macos
+            archive: AstroVision-X-macos-arm64.zip
+          - os: ubuntu-latest
+            name: linux
+            archive: AstroVision-X-linux-x64.tar.gz
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install the package and PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[science]" pyinstaller
+
+      - name: Build
+        run: pyinstaller --noconfirm --clean packaging/pyinstaller/astrovision-gui.spec
+
+      - name: Self-test the frozen build (Windows)
+        if: runner.os == 'Windows'
+        run: dist\AstroVision-X\AstroVision-X.exe --self-test
+
+      - name: Self-test the frozen build (Unix)
+        if: runner.os != 'Windows'
+        run: ./dist/AstroVision-X/AstroVision-X --self-test
+
+      - name: Archive (Windows)
+        if: runner.os == 'Windows'
+        run: Compress-Archive -Path dist\AstroVision-X -DestinationPath ${{ matrix.archive }}
+
+      - name: Archive (macOS)
+        if: runner.os == 'macOS'
+        run: cd dist && zip -qr ../${{ matrix.archive }} AstroVision-X
+
+      - name: Archive (Linux)
+        if: runner.os == 'Linux'
+        run: cd dist && tar czf ../${{ matrix.archive }} AstroVision-X
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+          if-no-files-found: error
+
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.archive }}
