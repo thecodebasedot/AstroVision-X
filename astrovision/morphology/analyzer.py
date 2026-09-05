@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import copy
 from typing import Any, Dict, Optional
 
 import numpy as np
 
 from ..core.config import MorphologyConfig
 from ..core.logging import get_logger
+from ..core.parallel import map_work, worker_count
 from ..core.types import Morphology, ObjectClass, Source, SourceCatalog
 from ..io.image import AstroImage
 from .cas import asymmetry, smoothness
@@ -29,12 +31,20 @@ class MorphologyAnalyzer:
     fill the catalog with numbers that look like measurements but are not.
     """
 
-    def __init__(self, config: Optional[MorphologyConfig] = None):
+    def __init__(self, config: Optional[MorphologyConfig] = None, n_workers: int = 1):
         self.config = config or MorphologyConfig()
+        #: Processes for the per-source measurements: 1 here, 0 all cores but one.
+        self.n_workers = n_workers
 
     def run(self, image: AstroImage, catalog: SourceCatalog,
             segmentation: Optional[np.ndarray] = None) -> SourceCatalog:
-        """Measure and classify morphology for every eligible source."""
+        """Measure and classify morphology for every eligible source.
+
+        The per-source work is prepared here (cutout, footprint, sky), done
+        by :func:`measure_morphology` -- in this process or in the worker
+        pool when ``n_workers`` says so -- and written back here, so a
+        parallel run is the serial run, source for source.
+        """
         if not self.config.enabled:
             return catalog
 
@@ -43,8 +53,12 @@ class MorphologyAnalyzer:
         psf_model = image.meta.get("psf_model")
         psf_kernel = psf_model.as_kernel() if psf_model is not None else None
         psf_fwhm = float(psf_model.fwhm) if psf_model is not None else 0.0
-        n_measured = 0
+        settings = {"compute_cas": cfg.compute_cas, "compute_gini_m20": cfg.compute_gini_m20,
+                    "fit_sersic": cfg.fit_sersic, "detect_spiral_arms": cfg.detect_spiral_arms,
+                    "polar_bins": cfg.polar_bins, "uncertainty": cfg.uncertainty,
+                    "bootstrap_samples": cfg.bootstrap_samples}
 
+        pending = []
         for source in catalog:
             if not self._eligible(source, psf_fwhm):
                 source.morphology.label = Morphology.UNRESOLVED
@@ -82,91 +96,40 @@ class MorphologyAnalyzer:
                 footprint = None
             source.meta["morphology_area"] = int(footprint.sum()) if footprint is not None else 0
             local_noise = float(source.meta.get("local_rms", 0.0) or 0.0)
-            extras: Dict[str, Any] = {}
+            payload = {
+                "id": int(source.id), "cut": np.ascontiguousarray(cut, dtype=float),
+                "centre": (float(centre[0]), float(centre[1])),
+                "footprint": footprint, "fit_region": fit_region,
+                "local_noise": local_noise, "reach": float(reach),
+                "morphology": copy.copy(source.morphology),
+                "axis_ratio": self._axis_ratio(source),
+                "petrosian_radius": float(source.photometry.petrosian_radius),
+                "r50": float(source.meta.get("r50", float("nan"))),
+                "psf_kernel": psf_kernel, "psf_fwhm": psf_fwhm, "settings": settings,
+            }
+            pending.append((source, payload))
 
-            if cfg.compute_cas:
-                # Concentration already comes from the photometry stage's
-                # curve of growth, so only A and S are computed here.
-                # Sky for the noise corrections: outside the object and not
-                # a neighbour that was replaced with zeros.
-                sky = None
-                if footprint is not None:
-                    sky = ~footprint
-                    if fit_region is not None:
-                        sky = sky & fit_region
-                result = asymmetry(cut, centre, footprint, sky_mask=sky)
-                source.morphology.asymmetry = result["asymmetry"]
-                extras["asymmetry_sky"] = result["asymmetry_sky"]
-                result_s = smoothness(cut, centre=centre, mask=footprint, sky_mask=sky,
-                                      petrosian_radius=source.photometry.petrosian_radius)
-                source.morphology.smoothness = result_s["smoothness"]
-                extras.update(result_s)
-
-            if cfg.compute_gini_m20:
-                stats = gini_m20(cut, footprint)
-                source.morphology.gini = stats.get("gini", float("nan"))
-                source.morphology.m20 = stats.get("m20", float("nan"))
-                extras["merger_statistic"] = merger_statistic(
-                    source.morphology.gini, source.morphology.m20)
-                extras["bulge_statistic"] = bulge_statistic(
-                    source.morphology.gini, source.morphology.m20)
-
-            if cfg.uncertainty and local_noise > 0:
-                # Error bars come from re-measuring on noise realisations, so
-                # this genuinely costs `bootstrap_samples` times the shape
-                # measurement -- which is why it is off by default rather
-                # than quietly making every run an order of magnitude slower.
-                errors = bootstrap_morphology(
-                    cut, local_noise, centre, footprint,
-                    n_samples=cfg.bootstrap_samples, seed=source.id)
-                annotate_uncertainty(source, errors)
-
-            axis_ratio = self._axis_ratio(source)
-            if cfg.fit_sersic:
-                fit = fit_sersic(cut, centre, footprint, axis_ratio,
-                                 source.morphology.position_angle,
-                                 refine=True, psf=psf_kernel, psf_fwhm=psf_fwhm,
-                                 fit_mask=fit_region,
-                                 r_half=float(source.meta.get("r50", float("nan"))),
-                                 noise=local_noise if local_noise > 0 else float("nan"))
-                if fit.success:
-                    source.morphology.sersic_index = fit.n
-                    source.morphology.effective_radius = fit.r_eff
-                    source.meta["sersic"] = fit.to_dict()
-                    if abs(fit.worst_correlation[2]) > 0.95:
-                        source.add_flag("degenerate_sersic_fit")
-
-            if cfg.detect_spiral_arms and source.morphology.area_pixels >= 40:
-                max_radius = min(reach, 0.48 * min(cut.shape))
-                arms = detect_spiral_arms(cut, centre, axis_ratio,
-                                          source.morphology.position_angle,
-                                          max_radius, n_angular=cfg.polar_bins,
-                                          noise=local_noise)
-                source.morphology.spiral_strength = arms["spiral_strength"]
-                source.morphology.arm_count = arms["arm_count"]
-                source.meta["spiral"] = arms
-                extras.update({"coherence": arms["coherence"],
-                               "pitch_angle": arms["pitch_angle"],
-                               "arm_significance": arms["arm_significance"],
-                               "winding": arms.get("winding", 0.0)})
-
-                bar = detect_bar(cut, centre, axis_ratio,
-                                 source.morphology.position_angle,
-                                 max_radius, n_angular=cfg.polar_bins)
-                source.morphology.bar_strength = bar["bar_strength"]
-                source.meta["bar"] = bar
-                extras.update({"bar_detected": bar["bar_detected"]})
-
-            label, confidence, scores = classify_morphology(source.morphology, extras)
-            source.morphology.label = label
-            source.morphology.label_confidence = confidence
-            source.meta["morphology_scores"] = scores
-            source.meta["morphology_extras"] = {
-                k: (float(v) if isinstance(v, (int, float, np.floating)) else v)
-                for k, v in extras.items()}
+        results = map_work(measure_morphology, [payload for _, payload in pending],
+                           n_workers=self.n_workers)
+        n_measured = 0
+        for (source, _), result in zip(pending, results):
+            source.morphology = result["morphology"]
+            if result["sersic"] is not None:
+                source.meta["sersic"] = result["sersic"]
+                if result["sersic_degenerate"]:
+                    source.add_flag("degenerate_sersic_fit")
+            if result["spiral"] is not None:
+                source.meta["spiral"] = result["spiral"]
+                source.meta["bar"] = result["bar"]
+            if result["errors"] is not None:
+                annotate_uncertainty(source, result["errors"])
+            source.meta["morphology_scores"] = result["scores"]
+            source.meta["morphology_extras"] = result["extras"]
             n_measured += 1
 
-        log.info("morphology measured for %d of %d sources", n_measured, len(catalog))
+        log.info("morphology measured for %d of %d sources%s", n_measured, len(catalog),
+                 f" on {worker_count(self.n_workers)} processes"
+                 if self.n_workers != 1 and len(pending) >= 8 else "")
         return catalog
 
     def _eligible(self, source: Source, psf_fwhm: float) -> bool:
@@ -211,3 +174,94 @@ class MorphologyAnalyzer:
         if not (np.isfinite(major) and np.isfinite(minor)) or major <= 0:
             return 1.0
         return float(np.clip(minor / major, 0.1, 1.0))
+
+
+def measure_morphology(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Every morphology measurement of one source, from its prepared cutout.
+
+    A module-level function so a worker process can be handed it by name.
+    It reads only the payload and returns only plain data (plus the updated
+    :class:`MorphologyMetrics`), which is what makes the parallel and the
+    serial stage the same computation.
+    """
+    cfg = payload["settings"]
+    cut = payload["cut"]
+    centre = payload["centre"]
+    footprint = payload["footprint"]
+    fit_region = payload["fit_region"]
+    local_noise = float(payload["local_noise"])
+    morphology = payload["morphology"]
+    extras: Dict[str, Any] = {}
+    result: Dict[str, Any] = {"sersic": None, "sersic_degenerate": False, "spiral": None,
+                              "bar": None, "errors": None}
+
+    if cfg["compute_cas"]:
+        # Concentration already comes from the photometry stage's curve of
+        # growth, so only A and S are computed here.  Sky for the noise
+        # corrections: outside the object and not a neighbour that was
+        # replaced with zeros.
+        sky = None
+        if footprint is not None:
+            sky = ~footprint
+            if fit_region is not None:
+                sky = sky & fit_region
+        measured = asymmetry(cut, centre, footprint, sky_mask=sky)
+        morphology.asymmetry = measured["asymmetry"]
+        extras["asymmetry_sky"] = measured["asymmetry_sky"]
+        result_s = smoothness(cut, centre=centre, mask=footprint, sky_mask=sky,
+                              petrosian_radius=payload["petrosian_radius"])
+        morphology.smoothness = result_s["smoothness"]
+        extras.update(result_s)
+
+    if cfg["compute_gini_m20"]:
+        stats = gini_m20(cut, footprint)
+        morphology.gini = stats.get("gini", float("nan"))
+        morphology.m20 = stats.get("m20", float("nan"))
+        extras["merger_statistic"] = merger_statistic(morphology.gini, morphology.m20)
+        extras["bulge_statistic"] = bulge_statistic(morphology.gini, morphology.m20)
+
+    if cfg["uncertainty"] and local_noise > 0:
+        # Error bars come from re-measuring on noise realisations, so this
+        # genuinely costs `bootstrap_samples` times the shape measurement --
+        # which is why it is off by default rather than quietly making every
+        # run an order of magnitude slower.
+        result["errors"] = bootstrap_morphology(
+            cut, local_noise, centre, footprint,
+            n_samples=cfg["bootstrap_samples"], seed=payload["id"])
+
+    axis_ratio = payload["axis_ratio"]
+    if cfg["fit_sersic"]:
+        fit = fit_sersic(cut, centre, footprint, axis_ratio, morphology.position_angle,
+                         refine=True, psf=payload["psf_kernel"], psf_fwhm=payload["psf_fwhm"],
+                         fit_mask=fit_region, r_half=payload["r50"],
+                         noise=local_noise if local_noise > 0 else float("nan"))
+        if fit.success:
+            morphology.sersic_index = fit.n
+            morphology.effective_radius = fit.r_eff
+            result["sersic"] = fit.to_dict()
+            result["sersic_degenerate"] = abs(fit.worst_correlation[2]) > 0.95
+
+    if cfg["detect_spiral_arms"] and morphology.area_pixels >= 40:
+        max_radius = min(payload["reach"], 0.48 * min(cut.shape))
+        arms = detect_spiral_arms(cut, centre, axis_ratio, morphology.position_angle,
+                                  max_radius, n_angular=cfg["polar_bins"], noise=local_noise)
+        morphology.spiral_strength = arms["spiral_strength"]
+        morphology.arm_count = arms["arm_count"]
+        result["spiral"] = arms
+        extras.update({"coherence": arms["coherence"], "pitch_angle": arms["pitch_angle"],
+                       "arm_significance": arms["arm_significance"],
+                       "winding": arms.get("winding", 0.0)})
+        bar = detect_bar(cut, centre, axis_ratio, morphology.position_angle,
+                         max_radius, n_angular=cfg["polar_bins"])
+        morphology.bar_strength = bar["bar_strength"]
+        result["bar"] = bar
+        extras.update({"bar_detected": bar["bar_detected"]})
+
+    label, confidence, scores = classify_morphology(morphology, extras)
+    morphology.label = label
+    morphology.label_confidence = confidence
+    result["morphology"] = morphology
+    result["scores"] = scores
+    result["extras"] = {k: (float(v) if isinstance(v, (int, float, np.floating)) else v)
+                        for k, v in extras.items()}
+    return result

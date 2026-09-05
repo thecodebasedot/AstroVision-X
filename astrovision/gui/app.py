@@ -297,6 +297,8 @@ class App:
             config.detection.threshold_sigma = float(params["threshold"])
         formats = params.get("formats") or ["html", "text", "json"]
         config.report.formats = [str(f) for f in formats]
+        # The desktop default is every core but one; the library's is one.
+        config.n_workers = int(params.get("workers", 0) or 0)
         output = params.get("output_dir") or os.path.join(self.workdir, "astrovision_output")
         config.report.output_dir = os.path.abspath(os.path.expanduser(str(output)))
         return config

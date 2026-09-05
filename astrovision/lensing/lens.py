@@ -17,6 +17,7 @@ import numpy as np
 from ..core.config import LensingConfig
 from ..core.logging import get_logger
 from ..core.numeric import logistic, sigma_clipped_stats
+from ..core.parallel import map_work
 from ..core.types import (
     LensCandidate,
     Morphology,
@@ -108,9 +109,11 @@ class LensSearch:
     True
     """
 
-    def __init__(self, config: Optional[LensingConfig] = None):
+    def __init__(self, config: Optional[LensingConfig] = None, n_workers: int = 1):
         self.config = config or LensingConfig()
         self.report: Dict[str, Any] = {}
+        #: Processes for the per-deflector search: 1 here, 0 all cores but one.
+        self.n_workers = n_workers
 
     def run(self, image: AstroImage, catalog: SourceCatalog) -> List[LensCandidate]:
         """Score every plausible deflector; returns the candidates found."""
@@ -126,6 +129,7 @@ class LensSearch:
         candidates: List[LensCandidate] = []
         n_examined = 0
 
+        pending = []
         for source in catalog:
             plausibility, terms = deflector_plausibility(source)
             if plausibility < 0.35:
@@ -141,42 +145,26 @@ class LensSearch:
             cutout = image.cutout(source.x, source.y, size, subtract_background=True)
             centre = ((cutout.shape[1] - 1) / 2.0, (cutout.shape[0] - 1) / 2.0)
             local_noise = float(source.meta.get("local_rms", global_noise) or global_noise)
+            pending.append((source, plausibility, terms, {
+                "cutout": np.ascontiguousarray(cutout, dtype=float), "centre": centre,
+                "local_noise": local_noise,
+                "semi_major": float(source.morphology.semi_major),
+                "min_axis_ratio": float(cfg.min_axis_ratio),
+                "max_arc_width": float(cfg.max_arc_width),
+                "min_arc_length": float(cfg.min_arc_length),
+                "ring_bins": int(cfg.ring_bins)}))
 
-            arcs = detect_arcs(cutout, centre, local_noise,
-                               threshold_sigma=2.5, min_area=8,
-                               min_axis_ratio=cfg.min_axis_ratio,
-                               max_width=cfg.max_arc_width,
-                               min_radius=max(3.0,
-                                              0.9 * source.morphology.semi_major))
-            arcs = [a for a in arcs if a.length >= cfg.min_arc_length]
-
-            # A complete Einstein ring fills its own radius, so the
-            # azimuthal baseline the arc finder relies on cannot see it.
-            # The radial profile can, and that is an independent path in.
-            ring_scan = detect_ring(cutout, centre, local_noise)
-            if not arcs and not ring_scan["ring_detected"]:
+        results = map_work(examine_deflector, [item[3] for item in pending],
+                           n_workers=self.n_workers)
+        for (source, plausibility, terms, payload), found in zip(pending, results):
+            if found is None:
                 source.lens_score = 0.0
                 continue
-            if not arcs:
-                arcs = [Arc(radius=ring_scan["radius"], angle=0.0,
-                            length=2 * np.pi * ring_scan["radius"],
-                            width=max(cfg.max_arc_width * 0.5, 1.5),
-                            axis_ratio=float(cfg.min_axis_ratio),
-                            tangential_alignment=1.0,
-                            peak_significance=ring_scan["significance"],
-                            flux=max(ring_scan["excess"], 1e-6),
-                            area=int(2 * np.pi * ring_scan["radius"]))]
+            arcs, theta_e, scatter, ring = (found["arcs"], found["theta_e"], found["scatter"],
+                                            found["ring"])
+            if found["einstein_ring"]:
                 source.add_flag("einstein_ring_candidate")
-
-            # Multiple images of one source share a radius.  Discarding
-            # features far from the median radius removes unrelated
-            # neighbours that happen to fall in the search box, which would
-            # otherwise inflate the Einstein-radius scatter.
-            arcs = _consistent_radii(arcs)
-            theta_e, scatter = einstein_radius(arcs)
-            ring = ring_completeness(cutout, centre, theta_e,
-                                     width=max(cfg.max_arc_width * 0.6, 2.0),
-                                     n_bins=cfg.ring_bins, noise=local_noise)
+            centre = payload["centre"]
 
             score, breakdown = self._score(arcs, theta_e, scatter, ring,
                                            plausibility, source)
@@ -186,7 +174,7 @@ class LensSearch:
                 "einstein_radius_px": float(theta_e),
                 "radius_scatter": float(scatter),
                 "ring": ring,
-                "ring_scan": ring_scan,
+                "ring_scan": found["ring_scan"],
                 "deflector_terms": terms,
                 "score_breakdown": breakdown,
             }
@@ -310,6 +298,52 @@ class LensSearch:
         total = sum(weights[k] for k in breakdown)
         score = sum(v * weights[k] for k, v in breakdown.items()) / total
         return float(np.clip(score, 0.0, 1.0)), breakdown
+
+
+def examine_deflector(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The arc and ring search around one deflector, from its cutout.
+
+    Returns None when nothing lens-like is there, else the arcs (radius-
+    consistent), the Einstein radius and its scatter, the ring completeness
+    and the ring scan.  Module-level so a worker process can run it.
+    """
+    cutout, centre, local_noise = payload["cutout"], payload["centre"], payload["local_noise"]
+    arcs = detect_arcs(cutout, centre, local_noise,
+                       threshold_sigma=2.5, min_area=8,
+                       min_axis_ratio=payload["min_axis_ratio"],
+                       max_width=payload["max_arc_width"],
+                       min_radius=max(3.0, 0.9 * payload["semi_major"]))
+    arcs = [a for a in arcs if a.length >= payload["min_arc_length"]]
+
+    # A complete Einstein ring fills its own radius, so the azimuthal
+    # baseline the arc finder relies on cannot see it.  The radial profile
+    # can, and that is an independent path in.
+    ring_scan = detect_ring(cutout, centre, local_noise)
+    if not arcs and not ring_scan["ring_detected"]:
+        return None
+    einstein_ring = False
+    if not arcs:
+        arcs = [Arc(radius=ring_scan["radius"], angle=0.0,
+                    length=2 * np.pi * ring_scan["radius"],
+                    width=max(payload["max_arc_width"] * 0.5, 1.5),
+                    axis_ratio=float(payload["min_axis_ratio"]),
+                    tangential_alignment=1.0,
+                    peak_significance=ring_scan["significance"],
+                    flux=max(ring_scan["excess"], 1e-6),
+                    area=int(2 * np.pi * ring_scan["radius"]))]
+        einstein_ring = True
+
+    # Multiple images of one source share a radius.  Discarding features
+    # far from the median radius removes unrelated neighbours that happen
+    # to fall in the search box, which would otherwise inflate the
+    # Einstein-radius scatter.
+    arcs = _consistent_radii(arcs)
+    theta_e, scatter = einstein_radius(arcs)
+    ring = ring_completeness(cutout, centre, theta_e,
+                             width=max(payload["max_arc_width"] * 0.6, 2.0),
+                             n_bins=payload["ring_bins"], noise=local_noise)
+    return {"arcs": arcs, "theta_e": theta_e, "scatter": scatter, "ring": ring,
+            "ring_scan": ring_scan, "einstein_ring": einstein_ring}
 
 
 def _consistent_radii(arcs: List[Arc], tolerance: float = 0.45) -> List[Arc]:

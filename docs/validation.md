@@ -1482,6 +1482,42 @@ the schema files are the real ones.
 
 Tests: `tests/test_alerts.py`, `tests/test_real_data.py`.
 
+## Parallel stages
+
+The morphology and lens stages do the same work on every source, so each
+was split into a preparation step (cutout, footprint, sky), a module-level
+per-source function, and a write-back step; the function runs in this
+process or in a pool of spawned workers, through one call
+(`core.parallel.map_work`). Because it is the same function either way,
+the parallel run is the serial run: on a 640-pixel field with 211
+sources, every morphology statistic, Sérsic fit, flag and score, and the
+lens candidate list, are identical between one process and three (a test
+repeats the check on a smaller field). The worker count is left out of the
+configuration hash for that reason.
+
+| Stage, 211 sources, 4 cores (3 workers) | one process | three | speedup |
+| --- | --- | --- | --- |
+| morphology | 7.1 s | 3.2 s | 2.2× |
+| lens search | 4.6 s | 4.7 s | none -- see below |
+
+The lens stage's time on this field is the mass-model fits of its six
+candidates (4.4 of 4.6 s), which run in the main process; the arc search
+itself goes from 0.40 s to 0.23 s. On the IRAC field, where the search
+examined 2027 sources for 634 s, the search is what dominates and what is
+now parallel; the fits were not made parallel because a field has few
+candidates.
+
+The pool is started with the "spawn" method everywhere -- the only one
+that is safe from a process with threads, and the only one Windows has --
+and its first act is a ping with a two-minute deadline: a worker that
+cannot re-import the main module (a script fed on standard input, some
+notebooks) dies on start, and without the ping `Pool.map` would wait
+forever while replacements were spawned and died in turn. A pool that
+fails the ping is given up on for the process and the stage runs serially
+with a warning; a test forces that path.
+
+Tests: `tests/test_parallel.py`.
+
 ## Reproducibility
 
 The manifest records the configuration hash, package version, git revision

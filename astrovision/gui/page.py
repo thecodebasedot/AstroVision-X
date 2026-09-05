@@ -160,6 +160,7 @@ function optionsCard(prefix, withRedshift) {
     '<div><label class="f">Preset</label><select id="' + prefix + '_preset"><option value="">default</option>' + status.presets.map(p => '<option>' + p + '</option>').join('') + '</select></div>' +
     '<div><label class="f">Detection threshold (σ)</label><input type="number" id="' + prefix + '_thr" step="0.1" placeholder="3.5"></div>' +
     (withRedshift ? '<div><label class="f">Redshift (optional)</label><input type="number" id="' + prefix + '_z" step="0.01" placeholder="none"></div>' : '') +
+    '<div><label class="f">CPU cores (0 = all but one)</label><input type="number" id="' + prefix + '_workers" min="0" step="1" value="0"></div>' +
     '</div><label class="f">Output folder</label><input type="text" id="' + prefix + '_out" placeholder="' + esc(status.workdir) + '/astrovision_output">' +
     '<label class="f">Catalog database (optional, SQLite path; gives object histories across runs)</label><input type="text" id="' + prefix + '_db" placeholder="none">' +
     '<label class="f">Reports</label><div class="inline"><label><input type="checkbox" id="' + prefix + '_html" checked> HTML</label><label><input type="checkbox" id="' + prefix + '_text" checked> text</label><label><input type="checkbox" id="' + prefix + '_json" checked> JSON</label></div></div>';
@@ -168,7 +169,8 @@ function readOptions(prefix) {
   const formats = ['html', 'text', 'json'].filter(f => $(prefix + '_' + f).checked);
   const options = { preset: $(prefix + '_preset').value || null, threshold: $(prefix + '_thr').value || null,
            redshift: $(prefix + '_z') ? ($(prefix + '_z').value || null) : null,
-           output_dir: $(prefix + '_out').value || null, db: $(prefix + '_db').value || null, formats };
+           output_dir: $(prefix + '_out').value || null, db: $(prefix + '_db').value || null, formats,
+           workers: $(prefix + '_workers').value === '' ? 0 : +$(prefix + '_workers').value };
   memory.set('options.' + prefix, options);
   return options;
 }
@@ -179,6 +181,7 @@ function restoreOptions(prefix) {
   if ($(prefix + '_z') && o.redshift !== null) $(prefix + '_z').value = o.redshift;
   if (o.output_dir !== null) $(prefix + '_out').value = o.output_dir;
   if (o.db !== null) $(prefix + '_db').value = o.db;
+  if (o.workers !== undefined && o.workers !== null) $(prefix + '_workers').value = o.workers;
   ['html', 'text', 'json'].forEach(f => { $(prefix + '_' + f).checked = (o.formats || []).includes(f); });
 }
 

@@ -428,6 +428,11 @@ class AstroVisionConfig(_Section):
     name: str = "astrovision-run"
     random_state: int = 42
     log_level: str = "info"
+    #: Worker processes for the per-source stages (morphology, lens search):
+    #: 1 runs everything in this process, 0 uses all cores but one, N uses N.
+    #: The result does not depend on it, so it is left out of the
+    #: configuration hash a run is reproduced from.
+    n_workers: int = 1
     preprocess: PreprocessConfig = field(default_factory=PreprocessConfig)
     detection: DetectionConfig = field(default_factory=DetectionConfig)
     segmentation: SegmentationConfig = field(default_factory=SegmentationConfig)

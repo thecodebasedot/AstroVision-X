@@ -62,8 +62,10 @@ pyinstaller packaging/pyinstaller/astrovision-gui.spec
 left; the header is read at once -- size, band, epoch, pixel scale, the
 frame centre in ICRS, and a note when the WCS had to be refitted from
 another frame -- and a preview is shown. Choose a preset, threshold,
-redshift, output folder and reports, optionally a catalog database, and
-run. The right-hand pane lists every stage as it starts and finishes, with
+redshift, how many CPU cores the per-source stages may use (all but one by
+default), output folder and reports, optionally a catalog database, and
+run. A run can be stopped between stages; what ran stays. The last folders
+and options are remembered on this machine. The right-hand pane lists every stage as it starts and finishes, with
 its time, above the pipeline's log. When it finishes:
 
 - *summary*: counts by class, transients, lens candidates, anomalies; the
@@ -76,7 +78,8 @@ its time, above the pipeline's log. When it finishes:
   click on a row showing its cutout.
 - *report*: the HTML report itself.
 - *image*: the whole frame, asinh-stretched, north up.
-- *files*: what was written and where.
+- *files*: what was written and where; reports open in a tab, data files
+  download.
 
 **Series & transients.** Select two or more epochs of the same field; they
 are aligned, PSF-matched and differenced, and transients are scored

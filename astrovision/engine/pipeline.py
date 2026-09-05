@@ -121,10 +121,11 @@ class Pipeline:
         self.detector = Detector(self.config.detection)
         self.photometer = Photometer(self.config.photometry)
         self.segmenter = Segmenter(self.config.segmentation)
-        self.morphology = MorphologyAnalyzer(self.config.morphology)
+        self.morphology = MorphologyAnalyzer(self.config.morphology,
+                                             n_workers=self.config.n_workers)
         self.classifier = Classifier(self.config.classification)
         self.anomaly = AnomalyEngine(self.config.anomaly)
-        self.lensing = LensSearch(self.config.lensing)
+        self.lensing = LensSearch(self.config.lensing, n_workers=self.config.n_workers)
         self.transient = TransientDetector(self.config.transient)
         self.moving = MovingObjectFinder(self.config.moving)
         self.timeseries = LightCurveAnalyzer(self.config.timeseries)
