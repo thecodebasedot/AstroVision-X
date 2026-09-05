@@ -38,7 +38,7 @@ def _wait(base, job_id, timeout=240):
     deadline = time.time() + timeout
     while time.time() < deadline:
         _, job = _json(f"{base}api/jobs/{job_id}")
-        if job["status"] in ("done", "failed"):
+        if job["status"] in ("done", "failed", "cancelled"):
             return job
         time.sleep(0.5)
     raise AssertionError("job did not finish")
@@ -187,6 +187,63 @@ class TestSimulateThenAnalyse:
         _, jobs = _json(srv.url + "api/jobs")
         assert any(j["id"] == analysed["id"] and j["status"] == "done" for j in jobs)
         assert all("result" not in j for j in jobs)          # the list is light
+
+
+class TestCancelAndFiles:
+    def test_a_running_analysis_stops_after_its_current_stage(self, server):
+        srv, workdir = server
+        out = os.path.join(workdir, "big.fits")
+        _, job = _post(srv.url + "api/simulate", {"size": 384, "stars": 150, "galaxies": 40,
+                                                  "nebulae": 1, "clusters": 1, "lenses": 1,
+                                                  "anomalies": 2, "seed": 5, "out": out})
+        assert _wait(srv.url, job["id"])["status"] == "done"
+        status, job = _post(srv.url + "api/analyze", {"path": out, "formats": ["json"],
+                                                      "output_dir": os.path.join(workdir, "out2")})
+        assert status == 200
+        # Let it get going, then ask it to stop.
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            _, j = _json(f"{srv.url}api/jobs/{job['id']}")
+            if any(s["status"] == "ok" for s in j["stages"]):
+                break
+            time.sleep(0.3)
+        status, reply = _post(f"{srv.url}api/jobs/{job['id']}/cancel", {})
+        assert status == 200 and reply["cancel_requested"]
+        j = _wait(srv.url, job["id"], timeout=240)
+        assert j["status"] == "cancelled", j["error"]
+        assert "stopped before stage" in j["error"]
+        done = [s["name"] for s in j["stages"] if s["status"] == "ok"]
+        not_run = [s for s in j["stages"] if s["status"] == "cancelled"]
+        assert done and not_run                        # something ran, something did not
+        assert any("cancel requested" in line for line in j["log"])
+        # Cancelling a finished job changes nothing.
+        status, reply = _post(f"{srv.url}api/jobs/{job['id']}/cancel", {})
+        assert status == 200 and reply["status"] == "cancelled"
+
+    def test_written_files_are_served_by_their_key(self, server, tmp_path):
+        srv, workdir = server
+        out = os.path.join(workdir, "small.fits")
+        _, job = _post(srv.url + "api/simulate", {"size": 96, "stars": 12, "galaxies": 2,
+                                                  "nebulae": 0, "clusters": 0, "lenses": 0,
+                                                  "anomalies": 0, "seed": 9, "out": out})
+        sim = _wait(srv.url, job["id"])
+        status, ctype, body = _get(f"{srv.url}api/jobs/{sim['id']}/file?name=truth")
+        assert status == 200 and "json" in ctype and json.loads(body)
+        _, job = _post(srv.url + "api/analyze", {"path": out, "preset": "quicklook",
+                                                 "formats": ["html", "json"],
+                                                 "output_dir": os.path.join(workdir, "out3")})
+        done = _wait(srv.url, job["id"])
+        assert done["status"] == "done", done["error"]
+        status, ctype, body = _get(f"{srv.url}api/jobs/{done['id']}/file?name=html")
+        assert status == 200 and "text/html" in ctype and b"<html" in body.lower()
+        status, ctype, body = _get(f"{srv.url}api/jobs/{done['id']}/file?name=catalog_csv")
+        assert status == 200 and "csv" in ctype and body.startswith(b"id")
+        try:
+            _get(f"{srv.url}api/jobs/{done['id']}/file?name=../../etc/passwd")
+        except urllib.error.HTTPError as error:
+            assert error.code == 404
+        else:
+            raise AssertionError("only the job's own files may be served")
 
 
 def test_the_self_test_passes():

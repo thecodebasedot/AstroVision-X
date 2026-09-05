@@ -116,7 +116,13 @@ function fmt(v) {
 function human(bytes) { if (bytes < 1024) return bytes + ' B'; if (bytes < 1048576) return (bytes/1024).toFixed(0) + ' KB'; return (bytes/1048576).toFixed(1) + ' MB'; }
 
 let status = null, view = 'analyze', currentJob = null, poller = null;
-const state = { analyze: {path: '', dir: ''}, series: {paths: [], dir: ''}, alerts: {path: '', dir: ''} };
+// What the page remembers between sessions: the last folders and the run
+// options. Browser storage only, per machine, never sent anywhere.
+const memory = {
+  get(key, fallback) { try { const v = localStorage.getItem('avx.' + key); return v === null ? fallback : JSON.parse(v); } catch (e) { return fallback; } },
+  set(key, value) { try { localStorage.setItem('avx.' + key, JSON.stringify(value)); } catch (e) {} },
+};
+const state = { analyze: {path: '', dir: memory.get('dir.analyze', '')}, series: {paths: [], dir: memory.get('dir.series', '')}, alerts: {path: '', dir: memory.get('dir.alerts', '')} };
 
 // ---- file browser --------------------------------------------------------------
 function browser(id, kinds, onPick, multi) {
@@ -160,9 +166,20 @@ function optionsCard(prefix, withRedshift) {
 }
 function readOptions(prefix) {
   const formats = ['html', 'text', 'json'].filter(f => $(prefix + '_' + f).checked);
-  return { preset: $(prefix + '_preset').value || null, threshold: $(prefix + '_thr').value || null,
+  const options = { preset: $(prefix + '_preset').value || null, threshold: $(prefix + '_thr').value || null,
            redshift: $(prefix + '_z') ? ($(prefix + '_z').value || null) : null,
            output_dir: $(prefix + '_out').value || null, db: $(prefix + '_db').value || null, formats };
+  memory.set('options.' + prefix, options);
+  return options;
+}
+function restoreOptions(prefix) {
+  const o = memory.get('options.' + prefix, null); if (!o) return;
+  if (o.preset !== null) $(prefix + '_preset').value = o.preset;
+  if (o.threshold !== null) $(prefix + '_thr').value = o.threshold;
+  if ($(prefix + '_z') && o.redshift !== null) $(prefix + '_z').value = o.redshift;
+  if (o.output_dir !== null) $(prefix + '_out').value = o.output_dir;
+  if (o.db !== null) $(prefix + '_db').value = o.db;
+  ['html', 'text', 'json'].forEach(f => { $(prefix + '_' + f).checked = (o.formats || []).includes(f); });
 }
 
 const views = {
@@ -183,11 +200,11 @@ const views = {
           '<br><img class="preview" src="/api/preview.png?path=' + encodeURIComponent(path) + '" style="margin-top:6px;max-height:220px">';
       } catch (e) { $('inspect').innerHTML = '<span class="bad">' + esc(e.message) + '</span>'; }
     });
-    b.load(state.analyze.dir || status.workdir);
+    b.load(state.analyze.dir || status.workdir); restoreOptions('an');
     $('run').onclick = async () => {
       try {
         const job = await post('/api/analyze', Object.assign({path: state.analyze.path}, readOptions('an')));
-        state.analyze.dir = b.dir; watch(job.id); toast('analysis started');
+        state.analyze.dir = b.dir; memory.set('dir.analyze', b.dir); watch(job.id); toast('analysis started');
       } catch (e) { toast(e.message, true); }
     };
     if (currentJob) showJob(currentJob);
@@ -201,11 +218,11 @@ const views = {
       '<button class="btn primary" id="run" disabled>Run the series</button></div>' +
       '<div class="col wide" id="jobpane"><div class="card muted">Select two or more epochs on the left.</div></div></div>';
     const b = browser('fbs', ['image'], paths => { state.series.paths = paths; $('nsel').textContent = paths.length + ' selected'; $('run').disabled = paths.length < 2; }, true);
-    b.load(state.series.dir || status.workdir);
+    b.load(state.series.dir || status.workdir); restoreOptions('se');
     $('run').onclick = async () => {
       try {
         const body = Object.assign({paths: state.series.paths, alerts: $('se_alerts').value || null}, readOptions('se'));
-        const job = await post('/api/series', body); state.series.dir = b.dir; watch(job.id); toast('series started');
+        const job = await post('/api/series', body); state.series.dir = b.dir; memory.set('dir.series', b.dir); watch(job.id); toast('series started');
       } catch (e) { toast(e.message, true); }
     };
     if (currentJob) showJob(currentJob);
@@ -246,6 +263,7 @@ const views = {
     });
     b.load(state.alerts.dir || status.workdir);
     $('vet').onclick = async () => {
+      memory.set('dir.alerts', b.dir);
       try { const v = await post('/api/vet', {path: state.alerts.path, log: $('al_log').value || null, db: $('al_db').value || null}); window.open(v.url, '_blank'); toast(v.n_items + ' items to vet'); }
       catch (e) { toast(e.message, true); }
     };
@@ -254,7 +272,7 @@ const views = {
   async jobs() {
     const jobs = await api('/api/jobs');
     $('main').innerHTML = '<div class="row"><div class="col narrow"><div class="card jobs"><h2>Runs this session</h2>' +
-      (jobs.length ? jobs.map(j => '<div class="j" data-id="' + j.id + '"><span class="st ' + (j.status === 'done' ? 'ok' : j.status === 'failed' ? 'bad' : 'warn') + '">' + j.status + '</span><span>' + esc(j.kind) + ' · ' + esc(j.title) + '</span><span class="muted" style="margin-left:auto">' + (j.seconds ? j.seconds.toFixed(0) + ' s' : '') + '</span></div>').join('') : '<div class="muted">nothing yet</div>') +
+      (jobs.length ? jobs.map(j => '<div class="j" data-id="' + j.id + '"><span class="st ' + (j.status === 'done' ? 'ok' : j.status === 'failed' ? 'bad' : j.status === 'cancelled' ? 'muted' : 'warn') + '">' + j.status + '</span><span>' + esc(j.kind) + ' · ' + esc(j.title) + '</span><span class="muted" style="margin-left:auto">' + (j.seconds ? j.seconds.toFixed(0) + ' s' : '') + '</span></div>').join('') : '<div class="muted">nothing yet</div>') +
       '</div></div><div class="col wide" id="jobpane"></div></div>';
     document.querySelectorAll('.jobs .j').forEach(el => el.onclick = () => watch(el.dataset.id));
     if (currentJob) showJob(currentJob);
@@ -282,20 +300,25 @@ async function showJob(id) {
   let j; try { j = await api('/api/jobs/' + id); } catch (e) { clearInterval(poller); return; }
   $('hdrjob').textContent = j.kind + ' · ' + j.title + ' · ' + j.status + (j.seconds ? ' · ' + j.seconds.toFixed(0) + ' s' : '');
   const done = j.stages.filter(s => ['ok', 'skipped', 'failed'].includes(s.status)).length, total = j.stages.length || 1;
-  let html = '<div class="card"><h2>' + esc(j.kind) + ' · ' + esc(j.title) + ' <span class="r ' + (j.status === 'failed' ? 'bad' : j.status === 'done' ? 'ok' : 'warn') + '">' + j.status + '</span></h2>' +
+  const running = j.status === 'queued' || j.status === 'running';
+  let html = '<div class="card"><h2>' + esc(j.kind) + ' · ' + esc(j.title) + ' <span class="r ' + (j.status === 'failed' ? 'bad' : j.status === 'done' ? 'ok' : j.status === 'cancelled' ? 'muted' : 'warn') + '">' + j.status +
+    (running ? ' &nbsp;<button class="btn small" id="cancel">Stop after this stage</button>' : '') + '</span></h2>' +
     '<div class="bar"><i style="width:' + (j.status === 'done' ? 100 : Math.round(100 * done / total)) + '%"></i></div>' +
     '<div class="row"><div class="col"><div class="stages">' + j.stages.map(s => '<span class="n ' + s.status + '">' + (s.status === 'ok' ? '✓ ' : s.status === 'running' ? '▶ ' : s.status === 'failed' ? '✗ ' : s.status === 'skipped' ? '– ' : '· ') + esc(s.name) + '</span><span class="t">' + (s.seconds ? s.seconds.toFixed(1) + ' s' : '') + '</span>').join('') + '</div></div>' +
     '<div class="col wide"><pre class="log">' + esc((j.log || []).join('\n')) + '</pre></div></div>' +
     (j.error ? '<p class="bad">' + esc(j.error) + '</p>' : '') + '</div>';
-  if (j.status === 'done' || j.status === 'failed') { clearInterval(poller); poller = null; }
+  if (j.status === 'done' || j.status === 'failed' || j.status === 'cancelled') { clearInterval(poller); poller = null; }
   if (j.status === 'done') html += await resultsHtml(j);
-  if (html !== lastRendered) { pane.innerHTML = html; lastRendered = html; if (j.status === 'done') bindResults(j); }
+  if (html !== lastRendered) {
+    pane.innerHTML = html; lastRendered = html; if (j.status === 'done') bindResults(j);
+    const c = $('cancel'); if (c) c.onclick = async () => { c.disabled = true; c.textContent = 'stopping…'; try { await post('/api/jobs/' + j.id + '/cancel'); } catch (e) { toast(e.message, true); } };
+  }
   const logEl = pane.querySelector('pre.log'); if (logEl) logEl.scrollTop = logEl.scrollHeight;
 }
 async function resultsHtml(j) {
   const r = j.result || {};
   if (j.kind === 'simulate') {
-    return '<div class="card"><h2>Written</h2><ul class="plain">' + (r.paths || []).map(p => '<li>' + esc(p) + '</li>').join('') + '<li>' + esc(r.truth) + ' (truth table, ' + r.n_objects + ' objects)</li></ul>' +
+    return '<div class="card"><h2>Written</h2><ul class="plain">' + (r.paths || []).map((p, i) => '<li><a href="/api/jobs/' + j.id + '/file?name=path' + i + '">' + esc(p) + '</a></li>').join('') + '<li><a href="/api/jobs/' + j.id + '/file?name=truth" target="_blank">' + esc(r.truth) + '</a> (truth table, ' + r.n_objects + ' objects)</li></ul>' +
       '<button class="btn primary" id="analyseit">Analyse ' + ((r.paths || []).length > 1 ? 'these epochs' : 'this image') + '</button></div>';
   }
   const s = r.summary || {}, counts = s.class_counts || {};
@@ -340,7 +363,10 @@ async function renderTab(j, t) {
     el.innerHTML = '<div class="card"><h2>The image, asinh stretch, north up</h2><img class="preview" src="/api/jobs/' + id + '/preview.png"></div>';
   } else if (t === 'files') {
     const f = r.files || {};
-    el.innerHTML = '<div class="card"><h2>Written to ' + esc(r.output_dir) + '</h2><ul class="plain">' + Object.keys(f).map(k => '<li><b>' + esc(k) + '</b> ' + esc(f[k]) + '</li>').join('') + '</ul></div>';
+    el.innerHTML = '<div class="card"><h2>Written to ' + esc(r.output_dir) + '</h2><ul class="plain">' +
+      Object.keys(f).map(k => '<li><a href="/api/jobs/' + id + '/file?name=' + encodeURIComponent(k) + '" target="_blank">' + esc(k) + '</a> <span class="muted">' + esc(f[k]) + '</span></li>').join('') +
+      (r.alerts ? '<li><a href="/api/jobs/' + id + '/file?name=alerts" target="_blank">alerts</a> <span class="muted">' + esc(r.alerts.path) + '</span></li>' : '') +
+      '</ul><p class="muted" style="font-size:12px">Reports open in a new tab; the catalog and other data files download.</p></div>';
   }
 }
 function bindResults(j) {

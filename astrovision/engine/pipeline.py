@@ -27,7 +27,7 @@ from ..calibration.astrometry import apply_solution, solve_plate
 from ..calibration.photometry import apply_zero_point, solve_zero_point
 from ..classify import Classifier
 from ..core.config import AstroVisionConfig
-from ..core.exceptions import PipelineError
+from ..core.exceptions import PipelineError, PipelineCancelled
 from ..core.logging import get_logger, timed
 from ..core.provenance import build_manifest, catalog_digest
 from ..core.types import FieldAnalysis
@@ -106,12 +106,17 @@ class Pipeline:
     """
 
     def __init__(self, config: Optional[AstroVisionConfig] = None,
-                 progress: Optional[Callable[[StageResult], None]] = None):
+                 progress: Optional[Callable[[StageResult], None]] = None,
+                 cancel: Optional[Callable[[], bool]] = None):
         self.config = config or AstroVisionConfig()
         self.stages: List[StageResult] = []
         #: Called with a :class:`StageResult` as each stage starts
         #: (``status == "running"``) and ends; a GUI's progress bar hangs on it.
         self.progress = progress
+        #: Asked before every stage; when it answers True the run stops there
+        #: with :class:`~astrovision.core.exceptions.PipelineCancelled`.  A
+        #: stage is never interrupted half-way, so what has run is intact.
+        self.cancel = cancel
         self.preprocessor = Preprocessor(self.config.preprocess)
         self.detector = Detector(self.config.detection)
         self.photometer = Photometer(self.config.photometry)
@@ -142,6 +147,12 @@ class Pipeline:
             log.info("stage '%s' skipped (disabled)", name)
             return result
 
+        if self.cancel is not None and self.cancel():
+            result.status = "cancelled"
+            result.message = "stopped before this stage"
+            self.stages.append(result)
+            self._notify(result)
+            raise PipelineCancelled(f"run stopped before stage '{name}'")
         self._notify(StageResult(name=name, status="running"))
         start = time.perf_counter()
         try:

@@ -29,7 +29,7 @@ import webbrowser
 from collections import deque
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Deque, Dict, List, Optional, Sequence
+from typing import Any, Deque, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import parse_qs, urlparse
 
 import numpy as np
@@ -37,6 +37,7 @@ import numpy as np
 from .. import __version__
 from ..core.backend import capabilities, describe_capabilities
 from ..core.config import PRESETS, AstroVisionConfig
+from ..core.exceptions import PipelineCancelled
 from ..core.logging import get_logger
 
 log = get_logger("gui")
@@ -77,6 +78,7 @@ class Job:
     analysis: Any = None
     image: Any = None
     warnings: List[str] = field(default_factory=list)
+    cancel_event: threading.Event = field(default_factory=threading.Event)
 
     def stage_update(self, result) -> None:
         entry = {"name": result.name, "status": result.status,
@@ -166,6 +168,12 @@ class App:
                 for stage in job.stages:                    # stages this run never reached
                     if stage["status"] in ("pending", "running"):
                         stage["status"], stage["message"] = "skipped", "not part of this run"
+            except PipelineCancelled as exc:
+                job.status = "cancelled"
+                job.error = str(exc)
+                for stage in job.stages:
+                    if stage["status"] in ("pending", "running"):
+                        stage["status"], stage["message"] = "cancelled", "not run"
             except Exception as exc:                        # noqa: BLE001 - shown on the page
                 job.status = "failed"
                 job.error = f"{type(exc).__name__}: {exc}"
@@ -177,6 +185,31 @@ class App:
 
         threading.Thread(target=run, daemon=True, name=f"job-{job.id}").start()
         return job
+
+    def cancel(self, job_id: str) -> Dict[str, Any]:
+        """Ask a running job to stop after its current stage."""
+        job = self.job(job_id)
+        if job.status in ("queued", "running"):
+            job.cancel_event.set()
+            job.log_lines.append(f"{time.strftime('%H:%M:%S')} INFO cancel requested; the "
+                                 "current stage finishes first")
+        return {"id": job.id, "status": job.status, "cancel_requested": job.cancel_event.is_set()}
+
+    def job_file(self, job_id: str, name: str) -> Tuple[str, bytes]:
+        """One of the files a job wrote, by the key the result lists it under."""
+        job = self.job(job_id)
+        files = dict(job.result.get("files") or {})
+        if job.result.get("truth"):
+            files["truth"] = job.result["truth"]
+        for index, path in enumerate(job.result.get("paths") or []):
+            files[f"path{index}"] = path
+        if job.result.get("alerts"):
+            files["alerts"] = job.result["alerts"]["path"]
+        path = files.get(name)
+        if path is None or not os.path.isfile(path):
+            raise FileNotFoundError(f"this job wrote no file called {name!r}")
+        with open(path, "rb") as handle:
+            return os.path.basename(path), handle.read()
 
     # -- status ----------------------------------------------------------------
     def status(self) -> Dict[str, Any]:
@@ -288,7 +321,9 @@ class App:
             job.stage_update(_Stage("preprocess", "running"))
             clean = Preprocessor(config.preprocess).run(image)
             job.image = clean
-            pipeline = Pipeline(config, progress=job.stage_update)
+            if job.cancel_event.is_set():
+                raise PipelineCancelled("run stopped after preprocessing")
+            pipeline = Pipeline(config, progress=job.stage_update, cancel=job.cancel_event.is_set)
             redshift = params.get("redshift")
             analysis = pipeline.run(clean, redshift=None if redshift in (None, "")
                                     else float(redshift), preprocess=False)
@@ -332,7 +367,7 @@ class App:
             job.stages = [{"name": s, "status": "pending", "seconds": 0.0, "message": ""}
                           for s in STAGES]
             series = ImageSeries.from_paths(paths, name=str(params.get("name") or "series"))
-            pipeline = Pipeline(config, progress=job.stage_update)
+            pipeline = Pipeline(config, progress=job.stage_update, cancel=job.cancel_event.is_set)
             redshift = params.get("redshift")
             analysis = pipeline.run_series(series, redshift=None if redshift in (None, "")
                                            else float(redshift))
@@ -634,6 +669,17 @@ def _handler_for(app: App):
                             "image/png")
                     elif what == "preview.png":
                         self._send(200, app.job_preview_png(job_id), "image/png")
+                    elif what == "file":
+                        filename, body = app.job_file(job_id, query.get("name", ""))
+                        self.send_response(200)
+                        self.send_header("Content-Type", _content_type(filename))
+                        self.send_header("Content-Length", str(len(body)))
+                        self.send_header("Content-Disposition",
+                                         f'attachment; filename="{filename}"'
+                                         if not filename.endswith((".html", ".txt", ".json"))
+                                         else f'inline; filename="{filename}"')
+                        self.end_headers()
+                        self.wfile.write(body)
                     else:
                         self._json(404, {"error": "not found"})
                 else:
@@ -653,6 +699,8 @@ def _handler_for(app: App):
                     self._json(200, app.simulate(body).to_dict(with_result=False))
                 elif parts[:2] == ["api", "vet"]:
                     self._json(200, app.vet(body))
+                elif len(parts) == 4 and parts[:2] == ["api", "jobs"] and parts[3] == "cancel":
+                    self._json(200, app.cancel(parts[2]))
                 elif parts[:2] == ["api", "shutdown"]:
                     self._json(200, {"ok": True})
                     threading.Thread(target=self.server.shutdown, daemon=True).start()
@@ -662,6 +710,15 @@ def _handler_for(app: App):
                 self._fail(exc)
 
     return Handler
+
+
+_CONTENT_TYPES = {".html": "text/html; charset=utf-8", ".txt": "text/plain; charset=utf-8",
+                  ".json": "application/json", ".csv": "text/csv", ".fits": "application/fits",
+                  ".png": "image/png", ".avro": "application/octet-stream"}
+
+
+def _content_type(filename: str) -> str:
+    return _CONTENT_TYPES.get(os.path.splitext(filename)[1].lower(), "application/octet-stream")
 
 
 def _json_default(value: Any) -> Any:
