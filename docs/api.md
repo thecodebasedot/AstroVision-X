@@ -290,6 +290,22 @@ self-training. `select_for_review` defaults to `random` because that is what
 measured best — uncertainty sampling lost at three of four budgets and spent
 its labels on the majority class. See `docs/validation.md`.
 
+## The desktop application
+
+```python
+from astrovision.gui import launch, App, AppServer
+
+launch(port=8770)                                   # server + browser; Ctrl-C stops
+server = AppServer(App(workdir="."), port=0).start()  # embedded: server.url, .stop()
+```
+
+`astrovision gui [--port N] [--workdir DIR] [--no-browser]` from the command
+line, or `astrovision-gui`. The page talks to a JSON API on localhost
+(`/api/analyze`, `/api/series`, `/api/simulate`, `/api/alerts`, `/api/vet`,
+`/api/jobs/<id>/{report.html,report.json,catalog,candidates,cutout.png}`);
+`Pipeline(config, progress=callback)` is what feeds its stage-by-stage
+progress. Installers and standalone builds: `docs/gui.md`.
+
 ## Vetting: where the astronomer decides
 
 ```python

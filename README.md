@@ -35,6 +35,19 @@ astrovision simulate --out night.fits --epochs 6 --transients 3
 astrovision series night_epoch*.fits -o results/
 ```
 
+Or as a desktop application, with a file browser, a progress bar per stage,
+and the report, catalog and cutouts in a window:
+
+```bash
+astrovision gui                  # opens http://127.0.0.1:8770/ in your browser
+```
+
+![The desktop application](figures/gui_summary.png)
+
+It runs on any PC: `pip install` where Python exists, one-click installers
+in [`packaging/`](packaging/) for Windows, macOS and Linux, and standalone
+builds that need no Python at all -- see [docs/gui.md](docs/gui.md).
+
 ```python
 from astrovision import Pipeline, quick_field
 
@@ -340,6 +353,13 @@ pip install -e ".[all]"          # everything except PyTorch
 pip install -e ".[benchmark]"    # + photutils, SEP, for comparing catalogs
 ```
 
+For a PC without a Python environment to hand, `packaging/install.bat`
+(Windows) and `packaging/install.sh` (macOS, Linux) create a private one,
+install the application into it and add a launcher to the Desktop, Start
+Menu or applications menu; the `Desktop builds` workflow produces
+standalone folders that need no Python at all. Details in
+[docs/gui.md](docs/gui.md).
+
 Optional dependencies enable *features*, never whole subsystems. Without
 Astropy, FITS still reads and writes through a self-contained parser; without
 SciPy, labelling, filtering and fitting fall back to NumPy; without PyTorch,
@@ -461,6 +481,7 @@ boundary the whole project keeps, implemented as a refused request.
 - [`docs/methods.md`](docs/methods.md) — the science behind each measurement
 - [`docs/validation.md`](docs/validation.md) — how each number above was measured
 - [`docs/api.md`](docs/api.md) — the Python API
+- [`docs/gui.md`](docs/gui.md) — the desktop application and how to install it on any PC
 - [`examples/`](examples/) — runnable end-to-end scripts
 
 ---

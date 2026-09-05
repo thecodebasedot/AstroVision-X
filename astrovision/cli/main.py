@@ -382,6 +382,17 @@ def cmd_vet(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gui(args: argparse.Namespace) -> int:
+    """Start the desktop application: a local page in the browser."""
+    from ..gui.app import launch, self_test
+
+    if args.self_test:
+        return self_test()
+    launch(host=args.host, port=args.port, open_browser=not args.no_browser,
+           workdir=args.workdir, block=True)
+    return 0
+
+
 def cmd_alerts(args: argparse.Namespace) -> int:
     """Read alert files, or draft a TNS report from one alert."""
     from ..alerts import draft_tns_report, read_alerts, schema_of, write_tns_draft
@@ -531,6 +542,15 @@ def build_parser() -> argparse.ArgumentParser:
     db_history.add_argument("object", type=int)
     for sub in (db_info, db_ingest, db_cone, db_history):
         sub.set_defaults(func=cmd_db)
+
+    gui = subparsers.add_parser("gui", help="open the desktop application in the browser")
+    gui.add_argument("--host", default="127.0.0.1")
+    gui.add_argument("--port", type=int, default=8770)
+    gui.add_argument("--no-browser", action="store_true", help="do not open a browser")
+    gui.add_argument("--workdir", default=None, help="folder the file browser opens on")
+    gui.add_argument("--self-test", action="store_true",
+                     help="analyse a simulated field and exit (the packaged build's check)")
+    gui.set_defaults(func=cmd_gui)
 
     vet = subparsers.add_parser("vet", help="open a page to record verdicts on the candidates")
     vet.add_argument("image", help="FITS or image file to analyse and vet, or an Avro "
