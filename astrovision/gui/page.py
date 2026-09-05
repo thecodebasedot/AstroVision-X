@@ -269,6 +269,8 @@ const views = {
       '<p class="muted" style="font-size:12px">This window is a local web page served by the application on 127.0.0.1. It can read any file you can; never expose it on a network. Closing the terminal or pressing Ctrl-C there stops it.</p>' +
       '<button class="btn" id="quit">Quit the application</button></div>';
     $('quit').onclick = async () => { await post('/api/shutdown'); document.body.innerHTML = '<div class="card" style="margin:40px">AstroVision-X has stopped. You can close this tab.</div>'; };
+    // The backends are probed off the request thread at start-up; show them once known.
+    if (!status.backends_ready) setTimeout(async () => { status = await api('/api/status'); if (view === 'about') show('about'); }, 1500);
   }
 };
 
