@@ -12,7 +12,7 @@ from ..core.logging import get_logger
 from ..core.types import ObjectClass, SourceCatalog
 from ..io.image import AstroImage
 from .colours import annotate_catalog
-from .rules import classify_source, field_reference
+from .rules import POINT_ISOPHOTE, classify_source, field_reference, point_source_reference
 
 log = get_logger("classify.classifier")
 
@@ -70,6 +70,12 @@ class Classifier:
             np.nanmedian([s.morphology.fwhm for s in catalog]) or 3.0)
         psf_r90 = psf.encircled_radius(0.9) if psf is not None else None
         pixel_scale = image.pixel_scale if image.wcs is not None else 1.0
+        # What a star measures as, from the PSF stamp itself: the sizes the
+        # votes compare with, so a winged or undersampled PSF is not mistaken
+        # for a field of resolved sources.
+        point_reference = point_source_reference(psf, POINT_ISOPHOTE) if psf is not None else None
+        if point_reference is not None:
+            image.meta["point_source_reference"] = dict(point_reference)
 
         reference = field_reference(catalog, psf_fwhm)
 
@@ -78,7 +84,7 @@ class Classifier:
             for source in catalog:
                 object_class, confidence, scores = classify_source(
                     source, psf_fwhm, psf_r90, cfg.star_galaxy_threshold, pixel_scale,
-                    reference, colour_weight)
+                    reference, colour_weight, point_reference=point_reference)
                 source.object_class = object_class
                 source.class_confidence = confidence
                 source.class_scores = scores

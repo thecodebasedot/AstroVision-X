@@ -142,6 +142,18 @@ Real PSFs have wings, so any practical aperture loses a few percent. The
 radius — removes that bias. Without it, isolated-star photometry came out 5 %
 faint; with it, within 3 %.
 
+The PSF stamp is one estimate of that enclosed energy; the field's own
+bright stars are another, measured out to five FWHM with the wings beyond
+extrapolated from the curve's slope, and they come with what the stamp
+cannot give: the spread between stars. Against injected fluxes the stamp
+is the more accurate by about a percent, so it is what is applied; the
+field-star curve is the check on it, and when the stars disagree with
+each other or with the stamp by more than a few percent the report says
+so. On a photographic plate they disagree by 14 %, because emulsion is not
+linear and bright stars have larger images than faint ones; no single
+correction is right for that frame, and the number in the warning is the
+level at which its fluxes should be believed.
+
 ## Morphology
 
 **CAS** (Conselice 2003). *Concentration* `C = 5 log₁₀(r₈₀/r₂₀)` is about 5 for
@@ -213,6 +225,24 @@ its light profile *is* the PSF. Every test is expressed as a ratio to the
 measured PSF, so the same thresholds hold whatever the seeing was. The
 half-light radius separates the populations most cleanly, followed by
 peak-to-total flux, then isophotal width.
+
+"Ratio to the PSF" used to mean ratio to numbers derived from the PSF's
+FWHM on the assumption of a Gaussian: half the FWHM for the half-light
+radius, `1/(1.13 FWHM²)` for the peak fraction. A real PSF is not a
+Gaussian. Diffraction wings, an undersampled core, a photographic halo
+all put a star's half-light radius well above half its FWHM, and on a
+Spitzer IRAC field every star in a Galactic-plane field measured as
+resolved -- 3139 "galaxies" among 4040 sources. The references are now
+*measured on the PSF stamp with the estimators the sources get*: its
+curve of growth for r50 and r90, its flux-weighted second moments inside
+a 2 % isophote for the width, its brightest pixel over its total for the
+peak fraction (`classify.rules.point_source_reference`). On the
+simulator, stars then sit at 0.99 ± 0.2 of the r50 reference and 1.0 ±
+0.1 of the peak reference, galaxies at 2.3 and 0.3; on the IRAC field the
+same field's stars sit at 1.0 where the analytic reference had put them
+at 3, and the field comes out as 3359 stars and 655 galaxies. The lens
+search uses the same reference to skip "deflectors" smaller than one and
+a half point sources, which is what an arc could never be separated from.
 
 The thresholds sit between the two loci as measured on simulated fields. This
 detail is the difference between 42 % and 90 % accuracy: an early version put

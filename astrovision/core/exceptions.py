@@ -48,3 +48,7 @@ class PipelineError(AstroVisionError):
 
 class RegistryError(AstroVisionError):
     """Raised for duplicate or unknown registry keys."""
+
+
+class PipelineCancelled(AstroVisionError):
+    """The run was asked to stop between stages; nothing after that ran."""

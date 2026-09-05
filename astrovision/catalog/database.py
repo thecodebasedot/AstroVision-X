@@ -185,7 +185,8 @@ class CatalogDB:
     def fields(self) -> List[Dict[str, Any]]:
         rows = self.connection.execute(
             "SELECT id, name, path, band, mjd, n_sources, n_with_sky, reproducibility_key, "
-            "ingested FROM fields ORDER BY id").fetchall()
+            "ingested, ra_centre, dec_centre, width, height, pixel_scale FROM fields "
+            "ORDER BY id").fetchall()
         return [dict(row) for row in rows]
 
     # -- ingest ------------------------------------------------------------
