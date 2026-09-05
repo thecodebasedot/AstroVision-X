@@ -74,6 +74,12 @@ PAGE = r"""<!doctype html>
   .jobs div.j { display:flex; gap:10px; padding:7px 4px; border-bottom:1px solid var(--dim); cursor:pointer; align-items:center; }
   .jobs div.j:hover { background:var(--dim); } .jobs .st { min-width:60px; }
   a { color:var(--accent); }
+  .viewer { position:relative; background:#000; border:1px solid var(--line); border-radius:6px; overflow:hidden; height:calc(100vh - 300px); min-height:360px; }
+  .viewer canvas { display:block; width:100%; height:100%; cursor:grab; }
+  .viewer .hud { position:absolute; left:8px; bottom:8px; background:rgba(15,17,23,.85); padding:4px 8px; border-radius:6px; font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; pointer-events:none; }
+  .legend { display:flex; gap:10px; flex-wrap:wrap; font-size:12px; margin:6px 0; align-items:center; }
+  .legend label { display:flex; gap:4px; align-items:center; cursor:pointer; }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:50%; border:2px solid; }
 </style>
 </head>
 <body>
@@ -87,6 +93,7 @@ PAGE = r"""<!doctype html>
     <button data-v="series">Series &amp; transients</button>
     <button data-v="simulate">Simulate a field</button>
     <button data-v="alerts">Alerts</button>
+    <button data-v="database">Database</button>
     <button data-v="jobs">Runs</button>
     <button data-v="about">About</button>
     <div class="spacer"></div>
@@ -295,6 +302,151 @@ const views = {
   }
 };
 
+// ---- image viewer ---------------------------------------------------------------
+const CLASS_COLOURS = { star: '#4c8dff', galaxy: '#ffb86b', nebula: '#e6a5ff', star_cluster: '#a5ffd6', artifact: '#8b91a3', unknown: '#ffffff' };
+async function viewer(id) {
+  const canvas = $('vcanvas'), ctx = canvas.getContext('2d'), hud = $('hud');
+  const pos = await api('/api/jobs/' + id + '/positions');
+  const img = new Image();
+  let step = 1;
+  const resp = await fetch('/api/jobs/' + id + '/image.png?max=2048');
+  step = +(resp.headers.get('X-Downsample') || 1);
+  img.src = URL.createObjectURL(await resp.blob());
+  await new Promise(r => { img.onload = r; });
+  const H = pos.shape[0], W = pos.shape[1];                 // frame pixels
+  const shown = { star: true, galaxy: true, nebula: true, star_cluster: true, artifact: false, unknown: true, candidates: true, transients: true };
+  const legend = $('legend');
+  legend.innerHTML = Object.keys(CLASS_COLOURS).map(k => '<label><input type="checkbox" data-k="' + k + '"' + (shown[k] ? ' checked' : '') + '><i style="border-color:' + CLASS_COLOURS[k] + '"></i>' + k.replace('_', ' ') + '</label>').join('') +
+    '<label><input type="checkbox" data-k="candidates" checked><i style="border-color:#00e5ff;border-radius:2px"></i>lens / anomaly candidates</label>' +
+    (pos.transients.length ? '<label><input type="checkbox" data-k="transients" checked><i style="border-color:#ff5c8a"></i>transients</label>' : '') +
+    '<span class="muted">' + pos.rows.length + ' sources' + (step > 1 ? ', shown at 1/' + step : '') + '</span>';
+  legend.querySelectorAll('input').forEach(c => c.onchange = () => { shown[c.dataset.k] = c.checked; draw(); });
+  // View: scale (screen px per frame px) and offset of frame (0,0) in screen px. Frame y runs up (north up).
+  let scale = 1, ox = 0, oy = 0, selected = null;
+  function fit() {
+    const cw = canvas.clientWidth, ch = canvas.clientHeight; canvas.width = cw; canvas.height = ch;
+    scale = Math.min(cw / W, ch / H); ox = (cw - W * scale) / 2; oy = (ch - H * scale) / 2; draw();
+  }
+  const toScreen = (x, y) => [ox + x * scale, oy + (H - 1 - y) * scale];
+  const toFrame = (sx, sy) => [(sx - ox) / scale, H - 1 - (sy - oy) / scale];
+  function draw() {
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.imageSmoothingEnabled = scale < step;
+    ctx.drawImage(img, ox, oy, W * scale, H * scale);
+    ctx.lineWidth = 1.5;
+    pos.rows.forEach(r => {
+      const cls = r[3] in CLASS_COLOURS ? r[3] : 'unknown';
+      const cand = r[9] || (r[7] !== null && r[7] > 0.7);
+      if (!shown[cls] && !(cand && shown.candidates)) return;
+      const [sx, sy] = toScreen(r[1], r[2]); if (sx < -20 || sy < -20 || sx > canvas.width + 20 || sy > canvas.height + 20) return;
+      const rad = Math.max(4, Math.min(40, r[8] * 2.5 * scale));
+      ctx.strokeStyle = CLASS_COLOURS[cls]; ctx.beginPath(); ctx.arc(sx, sy, rad, 0, 6.283); ctx.stroke();
+      if (cand && shown.candidates) { ctx.strokeStyle = '#00e5ff'; ctx.strokeRect(sx - rad - 3, sy - rad - 3, 2 * rad + 6, 2 * rad + 6); }
+      if (selected && selected[0] === r[0]) { ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.arc(sx, sy, rad + 5, 0, 6.283); ctx.stroke(); ctx.lineWidth = 1.5; }
+    });
+    if (shown.transients) pos.transients.forEach(t => { const [sx, sy] = toScreen(t[1], t[2]); ctx.strokeStyle = '#ff5c8a'; ctx.beginPath(); ctx.moveTo(sx - 9, sy); ctx.lineTo(sx + 9, sy); ctx.moveTo(sx, sy - 9); ctx.lineTo(sx, sy + 9); ctx.stroke(); });
+  }
+  function sky(x, y) {                                   // TAN projection from the header's linear WCS, for the readout
+    const w = pos.wcs; if (!w) return '';
+    const dx = x + 1 - w.crpix[0], dy = y + 1 - w.crpix[1];
+    const xi = (w.cd[0][0] * dx + w.cd[0][1] * dy) * Math.PI / 180, eta = (w.cd[1][0] * dx + w.cd[1][1] * dy) * Math.PI / 180;
+    const ra0 = w.crval[0] * Math.PI / 180, dec0 = w.crval[1] * Math.PI / 180;
+    const den = Math.cos(dec0) - eta * Math.sin(dec0);
+    const ra = ra0 + Math.atan2(xi, den), dec = Math.atan2(Math.sin(dec0) + eta * Math.cos(dec0), Math.sqrt(xi * xi + den * den));
+    return '  RA ' + ((ra * 180 / Math.PI + 360) % 360).toFixed(5) + '  Dec ' + (dec * 180 / Math.PI).toFixed(5);
+  }
+  let dragging = null;
+  canvas.onmousedown = e => { dragging = [e.clientX, e.clientY, ox, oy, false]; canvas.style.cursor = 'grabbing'; };
+  window.onmouseup = e => {
+    if (!dragging) return; const moved = dragging[4]; canvas.style.cursor = 'grab';
+    if (!moved) {                                        // a click: pick the nearest source
+      const rect = canvas.getBoundingClientRect(); const [fx, fy] = toFrame(e.clientX - rect.left, e.clientY - rect.top);
+      let best = null, bd = 1e9;
+      pos.rows.forEach(r => { const d = Math.hypot(r[1] - fx, r[2] - fy); if (d < bd) { bd = d; best = r; } });
+      if (best && bd * scale < 25) { selected = best; showSource(best); draw(); }
+    }
+    dragging = null;
+  };
+  canvas.onmousemove = e => {
+    const rect = canvas.getBoundingClientRect(); const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    if (dragging) { ox = dragging[2] + (e.clientX - dragging[0]); oy = dragging[3] + (e.clientY - dragging[1]); if (Math.hypot(e.clientX - dragging[0], e.clientY - dragging[1]) > 3) dragging[4] = true; draw(); }
+    const [fx, fy] = toFrame(mx, my);
+    hud.textContent = 'x ' + fx.toFixed(1) + '  y ' + fy.toFixed(1) + sky(fx, fy) + '   zoom ' + scale.toFixed(2) + '×';
+  };
+  canvas.onwheel = e => { e.preventDefault(); const rect = canvas.getBoundingClientRect(); const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    const f = e.deltaY < 0 ? 1.2 : 1 / 1.2; const ns = Math.max(0.05, Math.min(40, scale * f)); ox = mx - (mx - ox) * ns / scale; oy = my - (my - oy) * ns / scale; scale = ns; draw(); };
+  canvas.ondblclick = () => fit();
+  function showSource(r) {
+    $('vstamp').style.display = ''; $('vstamp').src = '/api/jobs/' + id + '/cutout.png?x=' + r[1] + '&y=' + r[2] + '&size=48';
+    $('vinfo').innerHTML = '<b>source ' + r[0] + '</b> ' + esc(r[3]) + '<br>pixel (' + r[1] + ', ' + r[2] + ')' + (pos.wcs ? '<br>' + sky(r[1], r[2]).trim() : '') +
+      '<br>mag ' + fmt(r[4]) + ', S/N ' + fmt(r[5]) + (r[6] ? '<br>lens score ' + fmt(r[6]) : '') + (r[7] !== null ? '<br>anomaly score ' + fmt(r[7]) : '') + (r[9] ? '<br><span class="warn">lens candidate</span>' : '');
+  }
+  new ResizeObserver(fit).observe(canvas); fit();
+}
+
+// ---- database ---------------------------------------------------------------------
+views.database = function () {
+  $('main').innerHTML = '<div class="row"><div class="col narrow"><div class="card"><h2>Catalog database</h2><div id="fbd"></div><label class="f">or type a path</label><div class="inline"><input type="text" id="db_path" style="width:250px" value="' + esc(memory.get('db.path', '')) + '"><button class="btn small" id="db_open">Open</button></div></div>' +
+    '<div class="card"><h2>Cone search</h2><div class="inline"><div><label class="f">RA (deg)</label><input type="number" id="cone_ra" step="0.00001"></div><div><label class="f">Dec (deg)</label><input type="number" id="cone_dec" step="0.00001"></div><div><label class="f">radius (″)</label><input type="number" id="cone_r" value="30"></div></div><div style="margin-top:8px"><button class="btn" id="cone_go" disabled>Search</button></div></div></div>' +
+    '<div class="col wide" id="dbpane"><div class="card muted">Pick a catalog database written by an analysis (the "Catalog database" option). Every field ingested, every object seen more than once, a cone search at any position, and the light curve of any object.</div></div></div>';
+  const b = browser('fbd', ['other'], path => { if (/\.(sqlite|db)$/i.test(path)) openDb(path); });
+  b.load(memory.get('dir.database', '') || status.workdir);
+  $('db_open').onclick = () => openDb($('db_path').value);
+  let current = null;
+  async function openDb(path) {
+    current = path; $('db_path').value = path; memory.set('db.path', path); memory.set('dir.database', b.dir); $('cone_go').disabled = false;
+    try {
+      const info = await api('/api/db/info?path=' + encodeURIComponent(path));
+      const c = info.counts;
+      $('dbpane').innerHTML = '<div class="card"><h2>' + esc(path) + '</h2><div class="nums"><div class="num"><b>' + c.fields + '</b><span>fields</span></div><div class="num"><b>' + c.detections + '</b><span>detections</span></div><div class="num"><b>' + c.objects + '</b><span>objects</span></div></div></div>' +
+        '<div class="card"><h2>Fields</h2><div class="tablewrap"><table><thead><tr><th>id</th><th>name</th><th>band</th><th>mjd</th><th>sources</th><th>with sky</th><th>ingested</th></tr></thead><tbody>' +
+        info.fields.map(f => '<tr><td>' + f.id + '</td><td>' + esc(f.name) + '</td><td>' + esc(f.band) + '</td><td>' + fmt(f.mjd) + '</td><td>' + f.n_sources + '</td><td>' + f.n_with_sky + '</td><td>' + esc(f.ingested) + '</td></tr>').join('') + '</tbody></table></div></div>' +
+        '<div class="card"><h2>Objects seen more than once <span class="r">' + info.objects_with_history.length + '</span></h2>' + (info.objects_with_history.length ? '<div class="tablewrap" style="max-height:260px"><table><thead><tr><th>object</th><th>RA</th><th>Dec</th><th>detections</th><th>first MJD</th><th>last MJD</th><th>bands</th></tr></thead><tbody>' +
+        info.objects_with_history.map(o => '<tr data-id="' + o.id + '"><td>' + o.id + '</td><td>' + fmt(o.ra) + '</td><td>' + fmt(o.dec) + '</td><td>' + o.n_detections + '</td><td>' + fmt(o.first_mjd) + '</td><td>' + fmt(o.last_mjd) + '</td><td>' + esc(o.bands) + '</td></tr>').join('') + '</tbody></table></div>' : '<p class="muted">none yet: ingest a second epoch of the same field</p>') + '</div>' +
+        '<div id="dbresult"></div>';
+      $('dbpane').querySelectorAll('tr[data-id]').forEach(tr => tr.onclick = () => history(tr.dataset.id));
+      const first = info.fields.find(f => f.ra_centre !== null && f.ra_centre !== undefined);
+      if (first && $('cone_ra').value === '') { $('cone_ra').value = first.ra_centre; $('cone_dec').value = first.dec_centre; }
+    } catch (e) { $('dbpane').innerHTML = '<div class="card bad">' + esc(e.message) + '</div>'; }
+  }
+  $('cone_go').onclick = async () => {
+    try {
+      const q = '/api/db/cone?path=' + encodeURIComponent(current) + '&ra=' + $('cone_ra').value + '&dec=' + $('cone_dec').value + '&radius=' + $('cone_r').value + '&limit=300';
+      const r = await api(q); const cols = ['id', 'object_id', 'field_id', 'band', 'mjd', 'ra', 'dec', 'mag', 'flux', 'snr', 'class', 'separation_arcsec'];
+      $('dbresult').innerHTML = '<div class="card"><h2>Cone search <span class="r">' + r.n + ' detection(s) within ' + $('cone_r').value + '″</span></h2>' + (r.n ? '<div class="tablewrap" style="max-height:300px"><table><thead><tr>' + cols.map(c => '<th>' + c.replace(/_/g, ' ') + '</th>').join('') + '</tr></thead><tbody>' +
+        r.rows.map(x => '<tr data-obj="' + (x.object_id || '') + '">' + cols.map(c => '<td>' + esc(fmt(x[c])) + '</td>').join('') + '</tr>').join('') + '</tbody></table></div><p class="muted" style="font-size:12px">click a row for its object\'s history</p>' : '<p class="muted">nothing there</p>') + '</div>';
+      $('dbresult').querySelectorAll('tr[data-obj]').forEach(tr => { if (tr.dataset.obj) tr.onclick = () => history(tr.dataset.obj); });
+    } catch (e) { toast(e.message, true); }
+  };
+  async function history(objectId) {
+    try {
+      const h = await api('/api/db/history?path=' + encodeURIComponent(current) + '&object_id=' + objectId);
+      const rows = h.history; const o = h.object || {};
+      let card = document.getElementById('dbhistory'); if (!card) { card = document.createElement('div'); card.id = 'dbhistory'; $('dbpane').appendChild(card); }
+      card.innerHTML = '<div class="card"><h2>Object ' + objectId + ' <span class="r">' + rows.length + ' detection(s) · RA ' + fmt(o.ra) + ' Dec ' + fmt(o.dec) + '</span></h2><canvas id="dblc" width="760" height="180" style="width:100%;background:var(--bg);border-radius:6px"></canvas>' +
+        '<div class="tablewrap" style="max-height:220px;margin-top:8px"><table><thead><tr><th>field</th><th>band</th><th>MJD</th><th>mag</th><th>flux</th><th>S/N</th><th>class</th></tr></thead><tbody>' +
+        rows.map(r => '<tr><td>' + esc(r.field_name) + '</td><td>' + esc(r.band) + '</td><td>' + fmt(r.mjd) + '</td><td>' + fmt(r.mag) + '</td><td>' + fmt(r.flux) + '</td><td>' + fmt(r.snr) + '</td><td>' + esc(r['class']) + '</td></tr>').join('') + '</tbody></table></div></div>';
+      lightCurve($('dblc'), rows); card.scrollIntoView({ behavior: 'smooth' });
+    } catch (e) { toast(e.message, true); }
+  }
+};
+function lightCurve(c, rows) {
+  const ctx = c.getContext('2d'); ctx.clearRect(0, 0, c.width, c.height);
+  const pts = rows.filter(r => r.mjd !== null && (r.mag !== null || r.flux !== null));
+  if (!pts.length) { ctx.fillStyle = '#8b91a3'; ctx.fillText('no dated measurements', 10, 20); return; }
+  const useMag = pts.some(p => p.mag !== null); const val = p => useMag ? p.mag : p.flux, err = p => useMag ? p.mag_err : p.flux_err;
+  const xs = pts.map(p => p.mjd), ys = pts.map(val); const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const span = x1 > x0 ? x1 - x0 : 1; const sx = v => 40 + ((v - x0 + 0.05 * span) / (1.1 * span)) * (c.width - 60);
+  const fr = v => (y1 > y0 ? (v - y0) / (y1 - y0) : 0.5); const sy = v => useMag ? 15 + fr(v) * (c.height - 35) : c.height - 20 - fr(v) * (c.height - 35);
+  ctx.strokeStyle = '#262a36'; ctx.beginPath(); ctx.moveTo(40, c.height - 20); ctx.lineTo(c.width - 20, c.height - 20); ctx.stroke();
+  const bands = [...new Set(pts.map(p => p.band))]; const colours = ['#4c8dff', '#ffb86b', '#e6a5ff', '#a5ffd6', '#ff5c8a'];
+  bands.forEach((b, i) => { const sub = pts.filter(p => p.band === b).sort((p, q) => p.mjd - q.mjd); ctx.strokeStyle = ctx.fillStyle = colours[i % colours.length]; ctx.lineWidth = 1.5; ctx.beginPath();
+    sub.forEach((p, k) => { const x = sx(p.mjd), y = sy(val(p)); if (k) ctx.lineTo(x, y); else ctx.moveTo(x, y); }); ctx.stroke();
+    sub.forEach(p => { ctx.beginPath(); ctx.arc(sx(p.mjd), sy(val(p)), 4, 0, 6.283); ctx.fill(); if (err(p)) { ctx.beginPath(); ctx.moveTo(sx(p.mjd), sy(val(p) - err(p))); ctx.lineTo(sx(p.mjd), sy(val(p) + err(p))); ctx.stroke(); } });
+    ctx.fillText(b, 50 + 40 * i, 12); });
+  ctx.fillStyle = '#8b91a3'; ctx.font = '11px system-ui'; ctx.fillText('MJD ' + x0.toFixed(2), 40, c.height - 6); ctx.fillText(x1.toFixed(2), c.width - 80, c.height - 6); ctx.fillText(useMag ? 'mag' : 'flux', 4, c.height / 2);
+}
+
 // ---- jobs -------------------------------------------------------------------------
 function watch(id) { currentJob = id; if (poller) clearInterval(poller); showJob(id); poller = setInterval(() => showJob(id), 1500); }
 let lastTab = 'summary', lastRendered = '';
@@ -363,7 +515,10 @@ async function renderTab(j, t) {
   } else if (t === 'report') {
     el.innerHTML = '<iframe src="/api/jobs/' + id + '/report.html"></iframe>';
   } else if (t === 'image') {
-    el.innerHTML = '<div class="card"><h2>The image, asinh stretch, north up</h2><img class="preview" src="/api/jobs/' + id + '/preview.png"></div>';
+    el.innerHTML = '<div class="card"><h2>The image, asinh stretch, north up <span class="r muted">drag to pan, wheel to zoom, click a source</span></h2>' +
+      '<div class="legend" id="legend"></div><div class="row"><div class="col wide"><div class="viewer" id="viewer"><canvas id="vcanvas"></canvas><div class="hud" id="hud">loading…</div></div></div>' +
+      '<div class="col" style="flex:0 0 270px"><img class="stamp" id="vstamp" alt="" style="display:none"><div id="vinfo" class="muted" style="font-size:12px">click a source for its cutout and numbers</div></div></div></div>';
+    viewer(id);
   } else if (t === 'files') {
     const f = r.files || {};
     el.innerHTML = '<div class="card"><h2>Written to ' + esc(r.output_dir) + '</h2><ul class="plain">' +

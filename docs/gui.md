@@ -77,9 +77,17 @@ its time, above the pipeline's log. When it finishes:
 - *catalog*: every source, sortable by any column, filterable by text, a
   click on a row showing its cutout.
 - *report*: the HTML report itself.
-- *image*: the whole frame, asinh-stretched, north up.
+- *image*: the whole frame, asinh-stretched, north up, with every
+  detection drawn over it coloured by class, lens and anomaly candidates
+  boxed, transients crossed. Drag to pan, wheel to zoom (the full-
+  resolution frame is loaded, downsampled only beyond 2048 pixels),
+  double-click to fit, click a source for its cutout and numbers; the
+  readout gives pixel and, where the frame has a WCS, sky coordinates.
+  Classes can be switched off in the legend.
 - *files*: what was written and where; reports open in a tab, data files
   download.
+
+![The image viewer](../figures/gui_viewer.png)
 
 **Series & transients.** Select two or more epochs of the same field; they
 are aligned, PSF-matched and differenced, and transients are scored
@@ -96,6 +104,13 @@ the pipeline does before pointing it at real data.
 packets are listed as received, and "Open the vetting page" shows each
 with its cutouts, light curve and scores.
 
+**Database.** Open a catalog database written by an analysis (or type
+its path): the fields ingested, every object seen more than once, a cone
+search at any position (seeded with the first field's centre), and the
+light curve of any object, by band, from its detections across fields.
+
+![The database screen](../figures/gui_database.png)
+
 **Runs.** Everything run in this session, with its status and time;
 clicking one brings its results back.
 
@@ -107,9 +122,11 @@ discovery.
 
 `astrovision.gui.app` is a `ThreadingHTTPServer` on 127.0.0.1 with a JSON
 API (`/api/status`, `/api/browse`, `/api/inspect`, `/api/analyze`,
-`/api/series`, `/api/simulate`, `/api/alerts`, `/api/vet`, `/api/jobs/…`
-with `report.html`, `report.json`, `catalog`, `candidates`, `cutout.png`,
-`preview.png`); `astrovision.gui.page` is the page. Each run is a job on
+`/api/series`, `/api/simulate`, `/api/alerts`, `/api/vet`, `/api/db/info`,
+`/api/db/cone`, `/api/db/history`, `/api/jobs/…` with `report.html`,
+`report.json`, `catalog`, `candidates`, `cutout.png`, `preview.png`,
+`image.png`, `positions`, `file`, `cancel`); `astrovision.gui.page` is
+the page. Each run is a job on
 its own thread; the pipeline reports each stage through the `progress`
 callback `Pipeline` now accepts, and the package's log lines are routed
 to the job that produced them. The tests in `tests/test_gui.py` drive the

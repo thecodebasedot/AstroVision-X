@@ -503,6 +503,74 @@ class App:
             raise ValueError("this job has no image")
         return _preview(job.image.data, max_size, encode_png, stretch)
 
+    # -- the image viewer --------------------------------------------------------
+    def job_image_png(self, job_id: str, max_size: int = 2048) -> Tuple[bytes, int]:
+        """The frame as an 8-bit PNG no wider than ``max_size``; returns (png, step)."""
+        from ..vetting.png import encode_png, stretch
+        job = self.job(job_id)
+        if job.image is None:
+            raise ValueError("this job has no image")
+        array = np.asarray(job.image.data, dtype=float)
+        step = max(1, int(np.ceil(max(array.shape) / float(max_size))))
+        if step > 1:
+            h, w = (array.shape[0] // step) * step, (array.shape[1] // step) * step
+            array = array[:h, :w].reshape(h // step, step, w // step, step).mean(axis=(1, 3))
+        return encode_png(stretch(array)), step
+
+    def positions(self, job_id: str) -> Dict[str, Any]:
+        """Every source's position and the few numbers the overlay colours by."""
+        job = self.job(job_id)
+        if job.analysis is None:
+            raise ValueError("this job has no analysis")
+        rows = []
+        for s in job.analysis.catalog:
+            rows.append([int(s.id), round(float(s.x), 2), round(float(s.y), 2),
+                         s.object_class.value, _clean(s.photometry.magnitude),
+                         _clean(s.photometry.snr), _clean(s.lens_score),
+                         _clean(s.anomaly_score),
+                         round(float(s.morphology.semi_major), 2)
+                         if np.isfinite(s.morphology.semi_major) else 3.0,
+                         "lens_candidate" in s.flags])
+        transients = [[int(t.id), float(t.x), float(t.y), float(t.real_bogus)]
+                      for t in job.analysis.transients]
+        wcs = job.image.wcs.to_dict() if getattr(job.image, "wcs", None) is not None else None
+        return {"columns": ["id", "x", "y", "class", "mag", "snr", "lens", "anomaly",
+                            "semi_major", "lens_candidate"],
+                "rows": rows, "transients": transients,
+                "shape": list(job.image.shape), "wcs": wcs}
+
+    # -- the catalog database -----------------------------------------------------
+    def _db(self, path: str):
+        from ..catalog import CatalogDB
+        path = os.path.abspath(os.path.expanduser(str(path)))
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"no such database: {path}")
+        return CatalogDB(path)
+
+    def db_info(self, path: str) -> Dict[str, Any]:
+        with self._db(path) as db:
+            fields = db.fields()
+            return {"path": db.path, "counts": db.counts(), "fields": fields,
+                    "objects_with_history": db.objects_with_history(min_detections=2, limit=200)}
+
+    def db_cone(self, path: str, ra: float, dec: float, radius_arcsec: float,
+                table: str = "detections", limit: int = 500) -> Dict[str, Any]:
+        with self._db(path) as db:
+            rows = db.cone_search(float(ra), float(dec), float(radius_arcsec),
+                                 table=table, limit=int(limit))
+            return {"rows": [{k: _clean(v) for k, v in r.items()} for r in rows],
+                    "n": len(rows)}
+
+    def db_history(self, path: str, object_id: int) -> Dict[str, Any]:
+        with self._db(path) as db:
+            obj = db.object(int(object_id))
+            rows = db.history(int(object_id))
+            return {"object": None if obj is None else {k: _clean(v) for k, v in obj.items()},
+                    "history": [{k: _clean(v) for k, v in r.items()
+                                 if k in ("id", "field_id", "field_name", "band", "mjd", "flux",
+                                          "flux_err", "mag", "mag_err", "snr", "ra", "dec",
+                                          "class", "x", "y")} for r in rows]}
+
     # -- alerts and vetting -----------------------------------------------------
     def alerts(self, path: str, limit: int = 200) -> Dict[str, Any]:
         from ..alerts import read_alerts
@@ -645,6 +713,19 @@ def _handler_for(app: App):
                     self._send(200, app.preview_png(query["path"]), "image/png")
                 elif parts[1] == "alerts":
                     self._json(200, app.alerts(query["path"], int(query.get("limit", 200))))
+                elif parts[1] == "db" and len(parts) == 3:
+                    what = parts[2]
+                    if what == "info":
+                        self._json(200, app.db_info(query["path"]))
+                    elif what == "cone":
+                        self._json(200, app.db_cone(
+                            query["path"], float(query["ra"]), float(query["dec"]),
+                            float(query.get("radius", 30.0)), query.get("table", "detections"),
+                            int(query.get("limit", 500))))
+                    elif what == "history":
+                        self._json(200, app.db_history(query["path"], int(query["object_id"])))
+                    else:
+                        self._json(404, {"error": "not found"})
                 elif parts[1] == "jobs" and len(parts) == 2:
                     self._json(200, [j.to_dict(with_result=False)
                                      for j in sorted(app.jobs.values(), key=lambda j: -j.created)])
@@ -671,6 +752,17 @@ def _handler_for(app: App):
                             "image/png")
                     elif what == "preview.png":
                         self._send(200, app.job_preview_png(job_id), "image/png")
+                    elif what == "image.png":
+                        png, step = app.job_image_png(job_id, int(query.get("max", 2048)))
+                        self.send_response(200)
+                        self.send_header("Content-Type", "image/png")
+                        self.send_header("Content-Length", str(len(png)))
+                        self.send_header("X-Downsample", str(step))
+                        self.send_header("Cache-Control", "no-store")
+                        self.end_headers()
+                        self.wfile.write(png)
+                    elif what == "positions":
+                        self._json(200, app.positions(job_id))
                     elif what == "file":
                         filename, body = app.job_file(job_id, query.get("name", ""))
                         self.send_response(200)

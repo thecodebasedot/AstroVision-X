@@ -182,6 +182,43 @@ class TestSimulateThenAnalyse:
         status, v = _post(srv.url + "api/vet", {"path": path, "log": str(tmp_path / "v.json")})
         assert status == 200 and v["n_items"] == 1
 
+    def test_the_viewer_gets_the_frame_and_every_position(self, server, analysed):
+        srv, _ = server
+        base = f"{srv.url}api/jobs/{analysed['id']}/"
+        with urllib.request.urlopen(base + "image.png?max=64", timeout=30) as response:
+            assert response.headers["X-Downsample"] == "2"        # 128 px shown at 1/2
+            assert response.read()[:8] == b"\x89PNG\r\n\x1a\n"
+        with urllib.request.urlopen(base + "image.png", timeout=30) as response:
+            assert response.headers["X-Downsample"] == "1"
+        _, positions = _json(base + "positions")
+        assert positions["shape"] == [128, 128] and positions["wcs"] is not None
+        assert len(positions["rows"]) == analysed["result"]["n_sources"]
+        assert positions["columns"][:4] == ["id", "x", "y", "class"]
+        assert all(0 <= r[1] < 128 and 0 <= r[2] < 128 for r in positions["rows"])
+
+    def test_the_database_is_browsable(self, server, analysed):
+        srv, workdir = server
+        path = os.path.join(workdir, "cat.sqlite")
+        _, info = _json(srv.url + "api/db/info?path=" + path)
+        assert info["counts"]["fields"] == 1
+        assert info["counts"]["detections"] == analysed["result"]["n_sources"]
+        field = info["fields"][0]
+        assert field["n_with_sky"] == field["n_sources"]
+        _, positions = _json(f"{srv.url}api/jobs/{analysed['id']}/positions")
+        _, cone = _json(f"{srv.url}api/db/cone?path={path}&ra=150.0&dec=2.2&radius=600")
+        assert cone["n"] > 0 and "separation_arcsec" in cone["rows"][0]
+        nearest = cone["rows"][0]
+        _, history = _json(f"{srv.url}api/db/history?path={path}&object_id={nearest['object_id']}")
+        assert history["object"]["id"] == nearest["object_id"]
+        assert len(history["history"]) == 1 and history["history"][0]["band"] == nearest["band"]
+        assert "class" in history["history"][0]
+        try:
+            _get(srv.url + "api/db/info?path=" + os.path.join(workdir, "none.sqlite"))
+        except urllib.error.HTTPError as error:
+            assert error.code == 404
+        else:
+            raise AssertionError("expected 404")
+
     def test_runs_are_listed(self, server, analysed):
         srv, _ = server
         _, jobs = _json(srv.url + "api/jobs")
