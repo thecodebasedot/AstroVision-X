@@ -347,6 +347,11 @@ class LensingConfig(_Section):
     ring_bins: int = 72
     score_threshold: float = 0.5
     search_radius_factor: float = 4.0
+    #: A deflector must be resolved: its half-light radius at least this many
+    #: times the PSF's own, or arcs cannot be told from its light.  Set 0
+    #: to examine everything, as the search did before it met an
+    #: undersampled star field and spent ten minutes on 2000 stars.
+    min_deflector_size: float = 1.5
     #: Fit a mass model to the arcs of every candidate that has enough of them.
     fit_model: bool = True
     fit_shear: bool = True

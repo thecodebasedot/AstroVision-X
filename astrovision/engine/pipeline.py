@@ -521,8 +521,8 @@ class Pipeline:
             analysis.warn(
                 f"PSF FWHM {fwhm:.2f} px: the image is undersampled, so star/galaxy "
                 "separation, morphology and the lens search cannot tell resolved from "
-                "unresolved; treat every extended-source class and lens candidate as "
-                "unverified")
+                "unresolved, and blended pairs in a crowded field look like arcs; treat "
+                "every extended-source class and lens candidate as unverified")
         load = image.meta.get("survey_load") or {}
         if load and "MAGZP" not in image.header:
             unit = load.get("unit") or "unknown units"

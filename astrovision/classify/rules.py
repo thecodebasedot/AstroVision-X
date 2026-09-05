@@ -14,14 +14,79 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from ..core.logging import get_logger
-from ..core.numeric import logistic, softmax
+from ..core.numeric import SIGMA_TO_FWHM, logistic, softmax
 from ..core.types import Morphology, ObjectClass, Source, SourceCatalog
 
 log = get_logger("classify.rules")
 
 
+#: Fraction of the PSF peak inside which the reference width's second
+#: moments are taken.  Chosen on the simulator: at 0.02 stars measure
+#: 1.1 +/- 0.2 of the reference and galaxies 2.3, the same separation the
+#: analytic width gave, and on an undersampled IRAC field the field's
+#: stars measure 1.0 of it where the analytic width put them at 3.
+POINT_ISOPHOTE = 0.02
+
+
+def point_source_reference(psf_model, size_threshold: float = POINT_ISOPHOTE) -> Dict[str, float]:
+    """What a star measures as, with the same estimators the sources get.
+
+    The star/galaxy votes compare a source's half-light radius, isophotal
+    width and peak fraction with what a point source would give.  Deriving
+    those from the PSF's FWHM assumes a Gaussian core and no wings; a real
+    PSF -- diffraction wings, an undersampled core, a photographic halo --
+    is not that, and the analytic references then call every star
+    resolved.  So the PSF stamp itself is measured here as a source would
+    be: its curve of growth for r50 and r90, its flux-weighted second
+    moments for the width, its brightest pixel over its total for the peak
+    fraction.  ``size_threshold`` (a fraction of the peak) mimics the
+    isophote the second moments are taken within.
+    """
+    stamp = np.clip(np.asarray(psf_model.as_kernel(), dtype=float), 0.0, None)
+    total = float(stamp.sum())
+    fwhm = float(getattr(psf_model, "fwhm", 0.0) or 0.0)
+    if total <= 0 or stamp.ndim != 2:
+        return {"fwhm": fwhm, "r50": 0.5 * fwhm, "r90": fwhm,
+                "peak_fraction": 1.0 / max(1.13 * fwhm ** 2, 1e-9), "source": "analytic"}
+    stamp = stamp / total
+    ny, nx = stamp.shape
+    yy, xx = np.mgrid[0:ny, 0:nx]
+    cy = float((stamp * yy).sum())
+    cx = float((stamp * xx).sum())
+    # Curve of growth around the flux centroid.
+    r = np.hypot(xx - cx, yy - cy).ravel()
+    order = np.argsort(r)
+    cumulative = np.cumsum(stamp.ravel()[order])
+    radii = r[order]
+
+    def flux_radius(fraction: float) -> float:
+        index = int(np.searchsorted(cumulative, fraction))
+        index = min(max(index, 1), len(radii) - 1)
+        # Interpolate between the two enclosing samples, as the curve of
+        # growth does for sources, so a coarse pixel grid does not quantise it.
+        lo, hi = cumulative[index - 1], cumulative[index]
+        t = 0.0 if hi <= lo else float((fraction - lo) / (hi - lo))
+        return float(radii[index - 1] + t * (radii[index] - radii[index - 1]))
+
+    # Second moments within the isophote, as the detector measures them.
+    inside = stamp >= size_threshold * stamp.max()
+    weights = np.where(inside, stamp, 0.0)
+    w = float(weights.sum()) or 1.0
+    mx = float((weights * xx).sum() / w)
+    my = float((weights * yy).sum() / w)
+    var_x = float((weights * (xx - mx) ** 2).sum() / w)
+    var_y = float((weights * (yy - my) ** 2).sum() / w)
+    cov = float((weights * (xx - mx) * (yy - my)).sum() / w)
+    mean, diff = 0.5 * (var_x + var_y), 0.5 * (var_x - var_y)
+    semi_major = float(np.sqrt(max(mean + np.sqrt(diff ** 2 + cov ** 2), 1e-12)))
+    return {"fwhm": float(SIGMA_TO_FWHM * semi_major), "r50": flux_radius(0.5),
+            "r90": flux_radius(0.9), "peak_fraction": float(stamp.max()),
+            "source": "psf_stamp"}
+
+
 def stellarity(source: Source, psf_fwhm: float,
-               psf_r90: Optional[float] = None) -> float:
+               psf_r90: Optional[float] = None,
+               point_reference: Optional[Dict[str, float]] = None) -> float:
     """Probability that a source is unresolved, in ``[0, 1]``.
 
     Every test is expressed as a *ratio to the measured PSF*, so the same
@@ -37,32 +102,52 @@ def stellarity(source: Source, psf_fwhm: float,
         return 0.5
     votes: List[Tuple[float, float]] = []      # (value, weight)
     morphology = source.morphology
+    ref = point_reference if point_reference and point_reference.get("source") == "psf_stamp" \
+        else None
 
     r50 = source.meta.get("r50", float("nan"))
     if np.isfinite(r50) and r50 > 0:
         # A point source has r50 close to half the PSF FWHM; a resolved
         # galaxy is well above it.  This is the cleanest single separator.
-        votes.append((float(logistic(-(r50 / (0.5 * psf_fwhm)), scale=0.18,
-                                     midpoint=-1.55)), 1.6))
+        # Measured on the PSF stamp the reference is what a star gives
+        # (simulated stars sit at 0.99 +/- 0.2 of it, galaxies above 1.7);
+        # the analytic half-FWHM assumes a Gaussian and is used without one.
+        if ref is not None:
+            votes.append((float(logistic(-(r50 / max(ref["r50"], 1e-6)), scale=0.18,
+                                         midpoint=-1.45)), 1.6))
+        else:
+            votes.append((float(logistic(-(r50 / (0.5 * psf_fwhm)), scale=0.18,
+                                         midpoint=-1.55)), 1.6))
 
     if np.isfinite(source.photometry.peak) and np.isfinite(source.photometry.flux) \
             and source.photometry.flux > 0:
         # Peak-to-total flux is the classic compactness statistic: a point
         # source concentrates the maximum possible fraction into one pixel.
-        expected = 1.0 / max(1.13 * psf_fwhm ** 2, 1e-9)
-        ratio = (source.photometry.peak / source.photometry.flux) / expected
-        votes.append((float(logistic(ratio, scale=0.12, midpoint=0.50)), 1.4))
+        fraction = source.photometry.peak / source.photometry.flux
+        if ref is not None:
+            # Stars give 1.0 +/- 0.1 of the stamp's own peak fraction,
+            # galaxies 0.3.
+            votes.append((float(logistic(fraction / max(ref["peak_fraction"], 1e-9),
+                                         scale=0.12, midpoint=0.75)), 1.4))
+        else:
+            expected = 1.0 / max(1.13 * psf_fwhm ** 2, 1e-9)
+            votes.append((float(logistic(fraction / expected, scale=0.12, midpoint=0.50)), 1.4))
 
     if np.isfinite(morphology.fwhm) and morphology.fwhm > 0:
         # Isophotal second-moment width, which sits slightly above the true
         # PSF width even for stars because of the detection threshold.
-        votes.append((float(logistic(-(morphology.fwhm / psf_fwhm), scale=0.13,
-                                     midpoint=-1.40)), 1.2))
+        if ref is not None:
+            votes.append((float(logistic(-(morphology.fwhm / max(ref["fwhm"], 1e-6)),
+                                         scale=0.13, midpoint=-1.42)), 1.2))
+        else:
+            votes.append((float(logistic(-(morphology.fwhm / psf_fwhm), scale=0.13,
+                                         midpoint=-1.40)), 1.2))
 
     r90 = source.meta.get("r90", float("nan"))
-    if psf_r90 is not None and psf_r90 > 0 and np.isfinite(r90) and r90 > 0:
+    r90_ref = ref["r90"] if ref is not None else psf_r90
+    if r90_ref is not None and r90_ref > 0 and np.isfinite(r90) and r90 > 0:
         # Noisier than r50 -- the outer profile is faint -- so weighted less.
-        votes.append((float(logistic(-(r90 / psf_r90), scale=0.35, midpoint=-1.50)), 0.6))
+        votes.append((float(logistic(-(r90 / r90_ref), scale=0.35, midpoint=-1.50)), 0.6))
 
     if not votes:
         return 0.5
@@ -155,7 +240,8 @@ def field_reference(catalog: SourceCatalog, psf_fwhm: float) -> Dict[str, float]
 def classify_source(source: Source, psf_fwhm: float, psf_r90: Optional[float] = None,
                     threshold: float = 0.5, pixel_scale: float = 1.0,
                     reference: Optional[Dict[str, float]] = None,
-                    colour_weight: float = 0.8
+                    colour_weight: float = 0.8,
+                    point_reference: Optional[Dict[str, float]] = None
                     ) -> Tuple[ObjectClass, float, Dict[str, float]]:
     """Assign an object class with a confidence and per-class scores.
 
@@ -165,7 +251,7 @@ def classify_source(source: Source, psf_fwhm: float, psf_r90: Optional[float] = 
     ``colour_weight`` to 0 to ignore colour entirely.
     """
     morphology = source.morphology
-    shape_like = stellarity(source, psf_fwhm, psf_r90)
+    shape_like = stellarity(source, psf_fwhm, psf_r90, point_reference)
     colour_like = float(source.meta.get("colour_stellarity", float("nan")))
     point_like = (combine_stellarity(shape_like, colour_like, colour_weight)
                   if colour_weight > 0 else shape_like)

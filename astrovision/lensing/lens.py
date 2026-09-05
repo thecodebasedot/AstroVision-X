@@ -128,9 +128,24 @@ class LensSearch:
         _, _, global_noise = sigma_clipped_stats(data)
         candidates: List[LensCandidate] = []
         n_examined = 0
+        n_unresolved = 0
+        # A star's half-light radius, measured on the PSF stamp the way the
+        # sources are; below a multiple of it a "deflector" is a star or a
+        # blend and its light is where the arcs would have to be.
+        point = image.meta.get("point_source_reference")
+        if point is None and psf is not None:
+            from ..classify.rules import point_source_reference
+            point = point_source_reference(psf)
+        min_r50 = (cfg.min_deflector_size * float(point["r50"])
+                   if point and cfg.min_deflector_size > 0 else 0.0)
 
         pending = []
         for source in catalog:
+            r50 = float(source.meta.get("r50", float("nan")))
+            if min_r50 > 0 and np.isfinite(r50) and r50 < min_r50:
+                n_unresolved += 1
+                source.lens_score = 0.0
+                continue
             plausibility, terms = deflector_plausibility(source)
             if plausibility < 0.35:
                 continue
@@ -204,12 +219,14 @@ class LensSearch:
         candidates.sort(key=lambda c: -c.score)
         self.report = {
             "n_examined": n_examined,
+            "n_unresolved": n_unresolved,
+            "min_deflector_r50_px": float(min_r50),
             "n_candidates": len(candidates),
             "score_threshold": cfg.score_threshold,
             "pixel_scale": float(pixel_scale),
         }
-        log.info("lens search: %d candidates from %d plausible deflectors",
-                 len(candidates), n_examined)
+        log.info("lens search: %d candidates from %d plausible deflectors (%d sources "
+                 "too small to be deflectors)", len(candidates), n_examined, n_unresolved)
         return candidates
 
     def _fit_model(self, candidate, source, arcs, centre, theta_e_px: float,

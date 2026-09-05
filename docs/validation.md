@@ -1336,16 +1336,26 @@ mirror, fetched by URL; nothing from a survey archive was):
   is read as 1951 November 29 (MJD 33979).
 - *`CHNLNUM = 2`* with `INSTRUME = 'IRAC'` and no filter keyword gave band
   "clear"; it gives "IRAC2".
-- *A 1.7-pixel PSF.* At 1.2 arcsec/px the IRAC image is undersampled, and
-  the pipeline classified 3280 of 4040 sources in a Galactic-plane star
-  field as galaxies (1655 of them "mergers") and flagged 268 lens
-  candidates. Nothing in that report was wrong by its own definitions --
-  at that sampling a blended pair *is* extended -- and everything in it was
-  useless. The pipeline now warns, in the report's warning list, when the
-  PSF FWHM is under two pixels that star/galaxy separation, morphology and
-  the lens search cannot tell resolved from unresolved, and it warns when
-  a survey file has no zero point that the magnitudes are instrumental
-  (the IRAC pixels are in MJy/sr and were reported as magnitudes 20 to 16).
+- *A 1.7-pixel PSF with wings.* At 1.2 arcsec/px the IRAC image is
+  undersampled, and the pipeline classified 3280 of 4040 sources in a
+  Galactic-plane star field as galaxies (1655 of them "mergers") and
+  flagged 268 lens candidates. The cause was not the sampling alone: the
+  star/galaxy votes compared each source's half-light radius with *half
+  the PSF FWHM*, a Gaussian's value, and the IRAC PSF's stamp has a
+  half-light radius of 2.05 px against a 0.86 px Gaussian estimate, so
+  every star measured as resolved. The references are now measured on the
+  PSF stamp with the sources' own estimators (`point_source_reference`).
+  On the simulator the star/galaxy split is unchanged within noise (stars
+  97.7 → 98.6 % correct, galaxies 95.8 → 94.4 %, four fields, S/N > 10);
+  on the IRAC field the classes go from 865 stars and 3139 galaxies to
+  3359 stars and 655 galaxies, the morphology stage from 341 s to 12 s,
+  and the lens search -- which now also skips anything smaller than 1.5
+  point sources -- from 634 s over 2027 "deflectors" to 2 s over 542,
+  still with 113 candidates: blended pairs in a crowded field are what an
+  arc finder finds, and the report's undersampling warning now says so.
+  The pipeline also warns when a survey file has no zero point that the
+  magnitudes are instrumental (the IRAC pixels are in MJy/sr and were
+  reported as magnitudes 20 to 16).
 - *Time.* The M67 plate took 302 s end to end and the Spitzer mosaic
   1188 s -- for half a megapixel. The Sérsic fit convolved its model with
   the PSF by direct correlation on every one of some 150 evaluations per
