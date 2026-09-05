@@ -54,6 +54,11 @@ log = get_logger("engine.pipeline")
 #: Below this PSF FWHM (pixels) a source's extent cannot be measured, and
 #: everything that depends on "resolved" is reported with a warning.
 UNDERSAMPLED_FWHM_PX = 2.0
+#: Spread of the field stars' aperture corrections above which the report
+#: warns; and the gap between the PSF-stamp and field-star corrections
+#: above which it warns when the spread itself is small.
+APERTURE_CORRECTION_SPREAD = 0.05
+APERTURE_CORRECTION_GAP = 0.03
 
 #: Conventional blue-to-red ordering, so that a default colour pair is a
 #: colour and not its negative.  Unknown names keep their given order after
@@ -523,6 +528,23 @@ class Pipeline:
                 "separation, morphology and the lens search cannot tell resolved from "
                 "unresolved, and blended pairs in a crowded field look like arcs; treat "
                 "every extended-source class and lens candidate as unverified")
+        curve = (self.photometer.report or {}).get("growth_curve") or {}
+        spread = float(curve.get("uncertainty_at_primary", 0.0) or 0.0)
+        stars = float(curve.get("correction_at_primary", np.nan))
+        stamp = float(curve.get("psf_stamp_correction_at_primary", np.nan))
+        if spread > APERTURE_CORRECTION_SPREAD:
+            analysis.warn(
+                f"the field's {curve.get('n_stars', 0)} bright stars disagree on the aperture "
+                f"correction by {100 * spread:.0f} %: their profiles differ (a photographic "
+                "plate's brightness-dependent image, or a PSF that varies across the frame), "
+                "and fluxes are uncertain at that level")
+        elif np.isfinite(stars) and np.isfinite(stamp) and stars > 0 and stamp > 0:
+            gap = abs(stars / stamp - 1.0)
+            if gap > max(APERTURE_CORRECTION_GAP, 2.0 * spread):
+                analysis.warn(
+                    f"the PSF model and the field's stars give aperture corrections "
+                    f"{100 * gap:.0f} % apart ({stamp:.3f} vs {stars:.3f} at the primary "
+                    "aperture); the PSF stamp was used, and fluxes are uncertain at that level")
         load = image.meta.get("survey_load") or {}
         if load and "MAGZP" not in image.header:
             unit = load.get("unit") or "unknown units"

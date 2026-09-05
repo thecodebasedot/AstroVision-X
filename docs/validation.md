@@ -1088,6 +1088,64 @@ pre-2000 date, a channel number in place of a filter name.
 
 Tests: `tests/test_survey.py`, `tests/test_real_data.py`.
 
+## Aperture correction from the field's stars
+
+The aperture correction -- the light an aperture misses in the PSF's
+wings -- came from the PSF model's stamp: a 25-pixel, sub-pixel-registered
+stack of the field's stars. On a photographic plate that stamp depends on
+which stars went into it, which is why tiled and whole-frame photometry
+of M67 differed by 7 %. `photometry.growthcurve` now measures the
+enclosed-flux curve directly on the field's bright, unsaturated,
+point-like stars with no neighbour above a twentieth of their flux
+within the curve's reach, out to five FWHM, each with its own sky from an
+annulus beyond that, the outer wings extrapolated from the curve's
+power-law slope, the median taken over the twelve brightest. The curve
+answers `correction(radius)` and `uncertainty(radius)`, the latter the
+spread between stars.
+
+**Which one is applied.** Against the simulator's injected fluxes, for
+stars above signal-to-noise 20 in their adaptive apertures (mostly 4 to 6
+pixels), three fields:
+
+| Correction | flux / true, median |
+| --- | --- |
+| none | 0.944 |
+| PSF stamp | 0.995, 1.002, 0.990 |
+| field stars | 0.991, 0.979, 0.981 |
+
+The stamp is the more accurate by about a percent: the field-star curve
+is normalised by each star's flux at the far radius, where even a bright
+star's wings are near the noise, and the median of a dozen such
+normalisations sits high by the amount the noise took (restricting the
+curve to the brightest twelve stars, rather than all sixty that
+qualified, halved that bias; it did not remove it). So in the default
+`aperture_correction="auto"` the stamp is applied and the field-star
+curve is the *check* on it; `"stars"` applies the curve, which is the
+right choice when the stamp is not to be trusted, `"psf"` never builds
+the curve, `"none"` corrects nothing. The check is recorded in the
+photometry report (both corrections at the primary aperture, the spread,
+the wing fraction beyond the far radius) and the pipeline warns when the
+stars' spread exceeds 5 %, or when the two corrections differ by more
+than 3 % and twice the spread.
+
+**On the real images.** On the M67 plate the field's ten qualifying
+stars give 1.39 ± 0.14 at the 5-pixel aperture against the stamp's 1.18,
+and the report now carries the warning that fluxes on this frame are
+uncertain at 14 % because the stars' profiles differ -- which is what a
+photographic plate does and what the tiled comparison had found the hard
+way. On the IRAC mosaic no star qualifies (every one has a neighbour
+above a twentieth of its flux within 20 pixels), so the check is silent
+there and the report says nothing about it, which is the honest
+alternative to a curve from blended stars. The first version of the
+selection required *no* detection within the reach, and found no star at
+all on the plate: its 2772 detections, most of them grain, put one within
+13 pixels of any star.
+
+Tests: `tests/test_growthcurve.py` -- the selection rules on a hand-built
+catalog, the wing extrapolation on a synthetic power-law deficit, the
+curve against the stamp (2 %) and against injected fluxes (2 %) on a
+simulated field, the three modes in the photometer, the warning.
+
 ## Agreement with photutils and SEP
 
 Three 512² fields (160 stars, 30 galaxies, no cosmic rays or bad columns so
@@ -1388,7 +1446,10 @@ nine tiles' own models range from 3.3 to 4.6 px and 4.1 to 6.3 px, and the
 aperture correction follows r90. On the simulator, whose PSF is one Moffat
 for every star, the same comparison agrees to 1 %; on a plate the
 aperture correction itself is uncertain at the level the tiles disagree.
-That is now in the list of what is not validated.
+The photometer now measures that uncertainty from the field's own stars
+and the report says it (see [Aperture correction from the field's
+stars](#aperture-correction-from-the-fields-stars)): on this plate the
+ten bright isolated stars disagree on the correction by 14 %.
 
 **The full pipeline on each image.** Stage times in seconds:
 

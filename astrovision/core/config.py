@@ -186,6 +186,13 @@ class PhotometryConfig(_Section):
     local_background: bool = True
     annulus_inner: float = 8.0
     annulus_outer: float = 14.0
+    #: Where the aperture correction comes from: "stars" measures the
+    #: enclosed-flux curve of the field's bright isolated stars, "psf" uses
+    #: the PSF model's stamp, "auto" uses the stars when at least
+    #: ``growth_curve_min_stars`` qualify and the stamp otherwise, "none"
+    #: applies no correction.
+    aperture_correction: str = "auto"
+    growth_curve_min_stars: int = 5
 
 
 @dataclass

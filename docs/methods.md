@@ -142,6 +142,18 @@ Real PSFs have wings, so any practical aperture loses a few percent. The
 radius — removes that bias. Without it, isolated-star photometry came out 5 %
 faint; with it, within 3 %.
 
+The PSF stamp is one estimate of that enclosed energy; the field's own
+bright stars are another, measured out to five FWHM with the wings beyond
+extrapolated from the curve's slope, and they come with what the stamp
+cannot give: the spread between stars. Against injected fluxes the stamp
+is the more accurate by about a percent, so it is what is applied; the
+field-star curve is the check on it, and when the stars disagree with
+each other or with the stamp by more than a few percent the report says
+so. On a photographic plate they disagree by 14 %, because emulsion is not
+linear and bright stars have larger images than faint ones; no single
+correction is right for that frame, and the number in the warning is the
+level at which its fluxes should be believed.
+
 ## Morphology
 
 **CAS** (Conselice 2003). *Concentration* `C = 5 log₁₀(r₈₀/r₂₀)` is about 5 for
