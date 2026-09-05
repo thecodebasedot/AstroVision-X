@@ -9,6 +9,13 @@ name: Desktop builds
 on:
   push:
     tags: ["v*"]
+    # Also on any push that touches what the builds are made of, so a
+    # broken spec or launcher is found before a release, not at it.
+    paths:
+      - "packaging/**"
+      - "astrovision/gui/**"
+      - ".github/workflows/build.yml"
+      - "pyproject.toml"
   workflow_dispatch:
 
 jobs:

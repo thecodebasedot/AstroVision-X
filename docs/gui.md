@@ -40,8 +40,8 @@ from GitHub. To uninstall, delete the folder they name and the shortcuts.
 
 **Standalone builds, no Python needed.** The `Desktop builds` workflow
 (`.github/workflows/build.yml`) freezes the application with PyInstaller
-for Windows, macOS and Linux and attaches the archives to every tagged
-release. Unpack one and start `AstroVision-X` (`AstroVision-X.exe` on
+for Windows, macOS and Linux on every push that touches the packaging or
+the GUI, and attaches the archives to every tagged release. Unpack one and start `AstroVision-X` (`AstroVision-X.exe` on
 Windows) inside the folder; a terminal shows the address and the log, and
 Ctrl-C there stops it. Each build runs `--self-test`, a simulated field
 through the whole pipeline, before it is published, so a build that exists
