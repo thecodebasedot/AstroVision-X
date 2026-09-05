@@ -8,9 +8,12 @@ name: Desktop builds
 
 on:
   push:
+    # Tags are releases; branches are checked too, but only on a push that
+    # touches what the builds are made of, so a broken spec or launcher is
+    # found before a release, not at it.  (A `push` with only `tags` never
+    # fires for branches -- both must be listed.)
     tags: ["v*"]
-    # Also on any push that touches what the builds are made of, so a
-    # broken spec or launcher is found before a release, not at it.
+    branches: ["**"]
     paths:
       - "packaging/**"
       - "astrovision/gui/**"
