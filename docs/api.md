@@ -178,6 +178,254 @@ Enable the bootstrap in the pipeline with `config.morphology.uncertainty = True`
 it is off by default because it costs `bootstrap_samples` times the shape
 measurement.
 
+## Lens mass models
+
+```python
+from astrovision.lensing import (LensModel, arc_sample_points, einstein_mass,
+                                 fit_lens_model, ray_trace)
+
+model = LensModel(x0=64.0, y0=64.0, theta_e=12.0, axis_ratio=0.7,
+                  position_angle=35.0, shear1=0.03, shear2=-0.02)
+model.deflection(x, y)                  # alpha, in pixels
+model.source_plane(x, y)                # beta = theta - alpha
+model.magnification(x, y)               # signed; diverges on the critical curve
+
+fit = fit_lens_model(points, centre=(64.0, 64.0), theta_e_guess=12.0)
+fit.succeeded, fit.reason               # a refusal explains itself
+fit.model.axis_ratio, fit.model.shear_magnitude
+fit.theta_e_error                       # bootstrap over the arc positions
+fit.image_rms                           # residual in pixels
+fit.flags                               # e.g. shear_fixed_to_zero
+
+einstein_mass(1.2, z_lens=0.4, z_source=2.0)["mass_solar"]
+```
+
+Candidates from `LensSearch` carry the same results: `candidate.model`,
+`candidate.model_theta_e_arcsec`, `candidate.model_axis_ratio` and
+`candidate.mass`. A candidate whose arcs give fewer constraints than
+parameters is still a candidate — `candidate.model["model"]` is `None` and a
+note says why. Turn the fit off with `config.lensing.fit_model = False`.
+
+The simulator can ray-trace a source through a model, which is how the fit is
+tested against arcs it did not draw:
+
+```python
+arcs = ray_trace(shape, model, source_x, source_y, source_radius,
+                 source_flux=1.0e4)
+```
+
+## Spectroscopy
+
+```python
+from astrovision.spectra import (analyse_frame, analyse_spectrum, classify_bpt,
+                                 classify_supernova, extract_spectrum, fit_lines,
+                                 fit_wavelength_solution, measure_redshift)
+
+# A long-slit frame, an arc exposure and a line list
+analysis = analyse_frame(image, variance, arc=arc_image, line_list=arc_lines,
+                         sky_lines=sky_lines, resolution=5.0)
+analysis.summary()                      # one readable line
+analysis.stopped_at                     # "" when it ran to the end
+analysis.redshift.z, analysis.redshift.reliable, analysis.redshift.r_statistic
+analysis.bpt.classification             # star-forming / composite / Seyfert / LINER
+analysis.lines["H alpha"].flux, analysis.lines["H alpha"].detected
+
+# Or the pieces
+spectrum, trace = extract_spectrum(image, variance, method="optimal")
+solution = fit_wavelength_solution(arc_1d, arc_lines, order=3)
+solution.succeeded, solution.rms, solution.reason
+result = measure_redshift(calibrated)
+lines = fit_lines(calibrated, result.z, resolution=5.0)
+match = classify_supernova(calibrated, redshift=0.03)
+match.sn_type, match.confident, match.caveat
+```
+
+A step that cannot be done is not done: without an arc the spectrum keeps a
+column axis, and without a reliable redshift no lines are fitted — each would
+otherwise produce numbers with nothing behind them. `analysis.stopped_at` says
+which. Supernova typing is the exception and runs regardless, because a
+supernova is not a galaxy and the galaxy correlation failing on one is the
+expected outcome; pass the host `redshift` when it is known.
+
+Simulated frames come from `astrovision.simulate.spectrograph`:
+
+```python
+from astrovision.simulate.spectrograph import (ARC_LINES, SKY_LINES,
+                                               SpectrographConfig,
+                                               SpectrographSimulator)
+from astrovision.spectra import galaxy_spectrum, supernova_spectrum
+
+simulator = SpectrographSimulator(SpectrographConfig(seed=1))
+frame = simulator.object_frame(galaxy_spectrum(3.0, emission=1.2), redshift=0.12)
+arc = simulator.arc_frame()
+quick = simulator.extracted(supernova_spectrum("Ia", 0.0), redshift=0.02, snr=20)
+```
+
+## Human verdicts and active learning
+
+```python
+from astrovision.ml import (HumanVerdict, VerdictLog, compare_strategies,
+                            review_queue, select_for_review, verdicts_to_labels)
+
+queue = review_queue(catalog, probabilities, classes, n=20)   # random by default
+# each entry carries model_label, model_confidence, runner_up, uncertainty
+
+log = VerdictLog()
+log.add(HumanVerdict(source_id=41, label="galaxy", reviewer="a.astronomer",
+                     model_label="star", model_confidence=0.94,
+                     note="faint disc visible"))
+log.save("verdicts.json")
+
+log.agreement_with_model()["confidently_wrong"]   # calibration problems, first
+log.disagreements()                               # objects experts split on
+training = verdicts_to_labels(log, dataset)       # confident verdicts only
+
+compare_strategies(pool, test, classes,
+                   strategies=("random", "uncertainty", "balanced"))
+```
+
+A verdict without a named reviewer is refused: an unattributed decision cannot
+be told apart from the model's own output, and training on that is
+self-training. `select_for_review` defaults to `random` because that is what
+measured best — uncertainty sampling lost at three of four budgets and spent
+its labels on the majority class. See `docs/validation.md`.
+
+## Vetting: where the astronomer decides
+
+```python
+from astrovision.vetting import build_queue, serve
+
+queue = build_queue(analysis, image, limit=40,        # the ranked candidates, with cutouts
+                    include_sources=False, db=db)     # db: a CatalogDB, for histories
+serve(queue, log_path="verdicts.json", port=8765)     # local page; Ctrl-C to stop
+```
+
+Keys on the page: **R** real, **B** bogus, **U** unsure, **S** skip,
+**←** previous, **/** note. A verdict is refused without a reviewer's name
+and is appended to the active-learning `VerdictLog` with the model's own
+label and confidence beside it. From the command line:
+`astrovision vet image.fits --log verdicts.json [--db survey.sqlite] [--all-sources]`.
+
+An alert file is vetted as it is, without analysis:
+
+```python
+from astrovision.vetting import queue_for_alert_file, queue_from_alerts
+
+queue = queue_for_alert_file("ztf_public.avro", limit=50, db=db)   # ours, ZTF's or Rubin's
+queue = queue_from_alerts(packets)                                 # from AlertPacket objects
+```
+
+Each packet's science cutout is the stamp, its difference cutout the
+"subtracted" one, its previous detections, upper limits and forced
+photometry the light curve (in magnitudes, limits as arrows, forced points
+in grey), and its real-bogus score the rank; nothing is re-measured, and a
+`CatalogDB` adds this package's own detections at each position. Command
+line: `astrovision vet alerts.avro --log verdicts.json` -- the file is
+recognised by its Avro magic bytes, not its name.
+
+## Learning from unlabelled cutouts
+
+```python
+from astrovision.ml import (AugmentationPolicy, ContrastiveEncoder,
+                            anomaly_ranking_quality, label_efficiency,
+                            linear_probe)
+
+encoder = ContrastiveEncoder(cutout=48, width=16)
+encoder.fit(unlabelled_stamps, epochs=60)     # stamps only -- no labels taken
+embeddings = encoder.embed(stamps)
+classifier = encoder.to_classifier(classes)   # fresh head on learned features
+
+# What the representation contains, as opposed to what it could be trained to do
+linear_probe(encoder.embed(train.stamps), train_labels,
+             encoder.embed(test.stamps), test_labels)["balanced_accuracy"]
+
+# What the unlabelled data was worth, against the same labels from scratch
+label_efficiency(encoder, labelled, test, budgets=(10, 25, 50, 100))
+
+# Whether the embedding separates known oddities at all
+anomaly_ranking_quality(embeddings, is_anomalous)["auc"]
+
+AugmentationPolicy(resized_crop=True)          # off by default; see the docs
+```
+
+`fit` deliberately accepts no labels, so a run claiming to be unsupervised
+cannot have used any. The augmentation policy is the design: keeping only
+rotations and reflections costs 14 points of balanced accuracy against the
+default set.
+
+## Explaining a score
+
+```python
+from astrovision.ml import (deletion_curve, explain_catalog, explain_prediction,
+                            explain_stamp, retrieval_purity, retrieve_similar)
+
+# Which pixels the class score depended on
+saliency = explain_stamp(classifier, stamp)          # occlusion, by default
+saliency.heatmap, saliency.predicted_class, saliency.native_shape
+explain_stamp(classifier, stamp, method="grad-cam")  # faster, measurably worse
+
+# Is the map describing the model, or just looking convincing?
+check = deletion_curve(classifier, stamp, saliency.heatmap)
+check["advantage"], check["beats_chance"]            # positive means it earned it
+
+# Which measured features moved this prediction
+attribution = explain_prediction(gbdt, x, background=training_X,
+                                 feature_names=names, n_samples=200)
+attribution.explain()                                # a readable sentence
+attribution.top(3), attribution.errors, attribution.converged
+attribution.additivity_error()                       # must be small
+
+# What an unusual object resembles
+found = retrieve_similar(embeddings, index, n=3, labels=labels)
+found.explain()                                      # "nearest ... 3.4x typical"
+retrieval_purity(embeddings, labels)["lift"]         # > 1 means better than chance
+explain_catalog(catalog, top=10)                     # attaches to the oddest sources
+```
+
+`explain_stamp` defaults to occlusion because that is what measured better:
+on this classifier Grad-CAM beat chance on 21 of 40 stamps against occlusion's
+37, and put no more of its mass on the object than a uniform map would. The
+`deletion_curve` fill defaults to background noise rather than a constant —
+a constant narrows the stamp's noise distribution, which the asinh stretch
+renormalises against, and flatters every map. Both numbers are in
+`docs/validation.md`.
+
+## Training data and transfer
+
+```python
+from astrovision.ml import (class_balance_report, domain_study, evaluate,
+                            fine_tune, freeze_backbone, load_fits_cutouts,
+                            read_label_table, split_dataset, stamps_from_fields)
+
+# Real survey cutouts: one FITS file per object, plus a table of labels
+labels = read_label_table("labels.csv", id_column="objid",
+                          vote_columns={"galaxy": "p_spiral", "star": "p_star"})
+dataset = load_fits_cutouts("cutouts/", labels)
+dataset.report()                     # what loaded, what was dropped and why
+class_balance_report(dataset)        # the majority-class baseline to beat
+
+# Or from simulated fields, one instrument per config factory
+train = stamps_from_fields(lambda seed: SkyConfig(seed=seed, seeing_fwhm=3.0),
+                           range(400, 420))
+train, validation, test = split_dataset(train, (0.7, 0.15, 0.15), by_group="seed")
+
+# Adapt a trained model to a new instrument
+freeze_backbone(classifier)          # returns the parameter counts, so check them
+result = fine_tune(classifier, target_train, target_validation, epochs=60)
+evaluate(classifier, target_test)    # accuracy, per-class recall, confusion
+
+study = domain_study(train_source_model, source_test, target_pool, target_test,
+                     label_budgets=(12, 25, 50, 100), repeats=3)
+study.summary()                      # gap, and the labels needed to close it
+```
+
+`split_dataset(..., by_group="seed")` keeps stamps from one field together:
+they share its noise, PSF and background, so splitting them across train and
+test measures memorisation. `domain_study` draws each budget `repeats` times
+because a single draw of 25 labels varied by 0.14 in balanced accuracy here,
+and it always trains from scratch on the same labels for comparison — without
+that, a fine-tuning score says nothing about whether the pretraining helped.
+
 ## Reports
 
 ```python
@@ -199,6 +447,8 @@ from astrovision.io import crossmatch
 
 image = AstroImage.from_fits("field.fits")     # or .load() for npy/png/jpg
 image.describe(); image.stats(); image.cutout(x, y, 64)
+image.wcs.pixel_to_world(x, y)                 # ICRS degrees, whatever frame the header used
+image.wcs.derived_from                         # "" when read as written; else how it was refitted
 image.write("out.fits")
 
 series = ImageSeries.from_paths(sorted(paths))
@@ -207,6 +457,118 @@ series.times, series.bands(), series.check_alignment(), series.stack("median")
 write_catalog(catalog, "catalog.csv")          # csv, json, fits
 catalog = read_catalog("catalog.csv")
 matches = crossmatch(catalog_a, catalog_b, radius=2.0, use_world=True)
+```
+
+## Survey products
+
+```python
+from astrovision.io import load_survey_image
+
+image, report = load_survey_image("frame.fits.fz")     # SCI / MASK / WEIGHT (or VAR) planes
+image.mask, image.uncertainty                          # from the DQ bits and 1/sqrt(weight)
+report.gain, report.gain_source                        # "header", "assumed" or "pixels in electrons"
+report.n_masked, report.n_saturated, report.notes      # every assumption the loader made
+load_survey_image("frame.fits", mask_bits=1 | 4 | 16)  # honour only these DQ bits
+```
+
+The planes are found by their `EXTNAME` (`SCI`, `IMAGE`; `MASK`, `DQ`,
+`FLAGS`; `WEIGHT`, `WHT`, `IVAR`; `VAR`, `VARIANCE`; `ERR`, `SIGMA`), the
+science header is searched for gain, read noise, saturation, zero point,
+exposure and filter under every common spelling, and pixels already in
+electrons are recognised from `BUNIT` so the gain is not applied twice. A
+variance or weight plane becomes `image.uncertainty` and is combined with the
+preprocessor's own estimate rather than replaced by it; zero-weight pixels are
+masked. Frames past sixteen million pixels are memory-mapped.
+
+## Frames too large for memory
+
+```python
+from astrovision.engine.tiles import process_tiled, standard_stage, plan_tiles
+
+result = process_tiled(image, standard_stage(config), tile=2048, overlap=128)
+result.catalog                          # frame coordinates; each source knows its tile
+result.n_duplicates_removed, result.peak_tile_pixels, result.per_tile
+
+standard_stage(config, psf="shared")    # one PSF for every tile (default)
+standard_stage(config, psf="per-tile")  # each tile fits its own, if it has the stars
+for tile, sub in iter_tiles(image, tile=2048, overlap=128): ...
+```
+
+## Checking against other codes
+
+```python
+from astrovision.validation import benchmark_field, available_tools
+
+available_tools()                                     # {"photutils": True, "sep": True}
+for result in benchmark_field(clean, catalog, truth=truth, aperture_radius=5.0):
+    print(result.summary())
+    result.against_truth                              # recall, spurious, flux ratio per code
+```
+
+Needs `pip install -e ".[benchmark]"`. The comparison is on the same pixels,
+the same threshold and the same aperture; the measured agreement is in
+[`validation.md`](validation.md).
+
+## A catalog across fields and epochs
+
+```python
+from astrovision.catalog import CatalogDB, ingest_analysis
+
+with CatalogDB("survey.sqlite") as db:                 # SQLite: stdlib, NumPy-only
+    report = ingest_analysis(db, analysis, image)      # or db.ingest(catalog, name=, band=, mjd=)
+    report.n_matched, report.n_new_objects             # linked to known objects / founded new ones
+
+    db.cone_search(150.1, 2.2, radius_arcsec=30)       # every detection, nearest first
+    db.cone_search(150.1, 2.2, 30, table="objects")    # distinct sky objects instead
+    db.history(object_id)                              # its detections across fields, in time order
+    mjd, flux, err = db.light_curve(object_id, band="r")
+    db.objects_with_history(min_detections=3)          # most-seen objects first
+    db.field_catalog(field_id)                         # back as a SourceCatalog
+    db.fields(); db.counts()
+```
+
+Every row carries a nested HEALPix index (`astrovision.catalog.healpix`,
+pure NumPy, checked against healpy). Ingest links each detection to an
+existing object within the match radius (1.5 arcseconds by default) or
+founds a new one; a cone search is a handful of index ranges. The command
+line does the same: `astrovision analyze image.fits --db survey.sqlite`,
+then `astrovision db survey.sqlite cone RA DEC RADIUS`,
+`astrovision db survey.sqlite history OBJECT`, `astrovision db survey.sqlite info`.
+
+## Alerts and reports to the community
+
+```python
+from astrovision.alerts import (packets_from_analysis, write_alerts, read_alerts,
+                                draft_tns_report, write_tns_draft)
+
+packets = packets_from_analysis(analysis, series=series, verdict_log=log)   # one per transient
+write_alerts("alerts.avro", packets)              # Avro, ZTF vocabulary, cutouts as FITS.gz
+schema, packets = read_alerts("ztf_public.avro")  # ours, real ZTF, or Rubin diaSource alerts
+packets[0].history, packets[0].cutout_science, packets[0].real_bogus
+[d for d in packets[0].history if d.forced]      # ZTF forced photometry (fp_hists), as flux points
+
+report = draft_tns_report(packets[0], reporter="A. Astronomer", reporting_group_id=..,
+                          data_source_id=.., instrument_id=.., at_type="supernova")
+write_tns_draft(report, "tns_draft.json")         # marked _draft; nothing here can send
+```
+
+The Avro codec is standard-library Python and is cross-checked against
+fastavro (`pip install -e ".[alerts]"`) when that is installed. Command line:
+`astrovision series epoch_*.fits --alerts alerts.avro`,
+`astrovision alerts read alerts.avro`,
+`astrovision alerts tns alerts.avro --reporter "A. Astronomer" --candid N`.
+
+## Reproducing a run
+
+```python
+from astrovision.core.provenance import build_manifest, Manifest, same_result
+
+manifest = build_manifest(config, inputs=["frame.fits"], seeds={"random_state": 42})
+manifest.save("results/manifest.json")
+manifest.reproducibility_key()          # hash of everything that decides the result
+Manifest.load(path).differences(other)  # ["numpy 1.26.4 vs 2.0.1", "random seeds differ"]
+same_result(catalog_a, catalog_b)       # identical measurements, to 1e-6
+analysis.provenance["manifest"]         # the pipeline attaches one to every run
 ```
 
 ## Simulation

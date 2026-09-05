@@ -201,6 +201,12 @@ for source in analysis.catalog:
 | Variability | Reduced χ², Stetson J, von Neumann η, Lomb–Scargle periods |
 | Novelty | Isolation forest + autoencoder + k-NN isolation, rank-combined |
 | Strong lensing | Tangential arcs at a shared radius; radial scan for full rings |
+| Lens mass models | Isothermal ellipsoid + external shear fitted to arc positions, Einstein mass |
+| Spectroscopy | Long-slit extraction, arc calibration, cross-correlation redshifts, line fitting, BPT and supernova typing |
+| Transfer learning | Loaders for survey cutouts and alert stamps; measured cost of an instrument change and what it takes to recover |
+| Explainability | Occlusion and Grad-CAM saliency, Shapley attributions, nearest-neighbour retrieval — each checked against the model's own behaviour |
+| Self-supervision | Contrastive pretraining on unlabelled cutouts, with astronomy-appropriate augmentations |
+| Human-in-the-loop | Reviewer verdicts recorded as labels, model/reviewer agreement tracked, retraining loop |
 | Populations | Number counts, completeness turnover, Landy–Szalay clustering |
 
 ---
@@ -209,7 +215,10 @@ for source in analysis.catalog:
 
 Every number below is measured against the simulator's ground truth by the
 test suite, on fields with realistic Poisson and read noise, cosmic rays and
-bad columns. They are *not* claims about real survey data.
+bad columns. They are *not* claims about real survey data. What three real
+images (a DSS plate, a Spitzer mosaic, an IRAC stamp) did to the code, and
+the numbers they gave against photutils and SEP, are in
+[docs/validation.md](docs/validation.md#real-images).
 
 | Capability | Result |
 | --- | --- |
@@ -225,13 +234,36 @@ bad columns. They are *not* claims about real survey data.
 | Astrometric solution | 3.5″ header error → 0.047″, 0.110″ rms |
 | Photometric zero point | 24.987 ± 0.002 against a true 25.000 |
 | Probability calibration | expected calibration error 0.112 → 0.027 |
+| Spectroscopic redshift | 7 × 10⁻⁵ in Δz/(1+z) — about 21 km/s |
+| Spectroscopic redshift purity | 1.00 at S/N ≥ 8, 0.91 at 5, 0.25 at 3 |
+| Wavelength solution | 0.10 Å rms against truth, from a 26-line arc |
+| Line ratios ([N II]/Hα) | within 2 % of the drawn value |
+| BPT classification | 7/7 across the ionisation sequence |
+| Supernova typing | 30/36 typed, all 30 correct, 0 wrong |
 | Photometric redshift (5 filters) | scatter 0.015 in Δz/(1+z), 2.8 % outliers |
+| Agreement with photutils and SEP | 0.06–0.08 px, 0.2–0.3 % in flux where both detect |
+| Tiled vs whole-image catalog | 0.002 px, 0.1–1 % in flux, memory 191 → 23 MB |
+| Aperture photometry, 4096² frame | 1817 ms → 0.31 ms per aperture, identical to 4 × 10⁻¹⁶ |
+| Catalog database, 500k detections | cone search 2.5 ms at 5″, object history 0.13 ms |
+| Avro alert codec (stdlib) | byte-for-byte interchange with fastavro, both directions |
+| HEALPix index | exact agreement with healpy, nside 1 to 256 |
+| Gini and M20 vs statmorph | 0.01–0.04 scatter, rank correlation 0.7–0.9 |
+| Asymmetry vs statmorph | rank correlation −0.8 → +0.6 after the sky correction |
 | Photometric redshift (3 filters) | scatter 0.043, 22 % outliers — the filter count dominates |
 | Galaxy morphology (5 classes) | 59 % exact, 78 % at family level |
 | Transient recall | 12/14, with 2 spurious over five fields |
 | Moving-object recall | 10/10, 0 spurious over ten fields |
-| Strong-lens recall | 8/14, with 3 false positives over five fields |
+| Strong-lens recall | 4/15, with 9 false positives over five fields (ray-traced arcs) |
+| Lens model on exact constraints | θ_E, axis ratio, angle and shear all recovered |
+| Lens model on detected arcs | θ_E 20 % median error, axis ratio 0.13 |
 | CNN stamp classification | 85 % on a 266-stamp training set |
+| Cost of an instrument change | 0.92 → 0.70 balanced accuracy, a 23-point drop |
+| Recovery from 25 target labels | 0.795 ± 0.059, against 0.28 trained from scratch |
+| Saliency faithfulness (occlusion) | beats chance on 37/40 stamps; Grad-CAM on 21/40 |
+| Shapley attributions | informative features 100× above noise features |
+| Anomaly retrieval | 86 % same-class neighbours against a 35 % chance rate |
+| Self-supervised probe, 100 labels | 0.764 ± 0.008 against 0.655 ± 0.146 from scratch |
+| Active-learning selection | random beat uncertainty sampling at 3 of 4 budgets |
 | LSTM light-curve classification | 92 % over six variability classes |
 
 Known limits, stated plainly: nebula and star-cluster classification is weak
@@ -242,6 +274,30 @@ because they count photon and read noise but not sky estimation, blending or
 PSF-matching residuals; and Sérsic fits are effectively degenerate in
 `n` against `r_eff`, which is why they carry a correlation and a flag rather
 than a bare index.
+
+The transfer numbers deserve their caveat stated first: **no real survey data
+was used anywhere in this project.** Nothing outside the package registries
+was reachable from the environment it was built in, so the loaders for survey
+cutouts and alert stamps are exercised against files written in those formats,
+and the cost of changing instrument is measured between two *simulated* ones.
+The method and the shape of the answer are real; a number for SDSS or ZTF is
+not, and would need the data to obtain.
+
+Two spectroscopic limits belong in the same paragraph as the numbers above.
+Below signal-to-noise about 5 per pixel the redshift reliability flag stops
+meaning anything — purity falls to 0.25 — because a catastrophic failure at
+that depth is not a weak correlation but a confident match to the wrong
+feature. And the winning template is not a classification: a quasar here is
+matched by the starburst template and still gets the right redshift, which is
+the correlation working as designed rather than failing.
+
+The lens numbers changed for a reason worth naming. Simulated lenses now
+produce their arcs by **ray tracing through a mass model** instead of having
+them painted at a chosen radius, and recall against them is 4/15 rather than
+the 8/14 measured against painted arcs. The search did not get worse — the
+test stopped drawing the answer for it. Ray-traced systems often show one
+faint image where a painted one showed a tidy pair, and single-arc detections
+are also where the false positives come from.
 
 Colour is the case worth spelling out. Adding it to star/galaxy separation
 changes 93.9 % to 93.7 % — one object in 442, which is to say nothing. At
@@ -281,6 +337,7 @@ pip install -e ".[science]"      # + SciPy, Astropy
 pip install -e ".[ml]"           # + scikit-learn
 pip install -e ".[deep]"         # + PyTorch
 pip install -e ".[all]"          # everything except PyTorch
+pip install -e ".[benchmark]"    # + photutils, SEP, for comparing catalogs
 ```
 
 Optional dependencies enable *features*, never whole subsystems. Without
@@ -328,7 +385,73 @@ analysis = Pipeline().run_series(series)
 
 The pipeline reads the zero point from `MAGZP`, the gain from `GAIN` and the
 saturation level from `SATURATE` when present, and falls back to configured
-values otherwise. Every assumption it had to make is listed in the report.
+values otherwise. Every assumption it had to make is listed in the report,
+and so is anything the data cannot support: a PSF under two pixels FWHM, or
+pixels with no zero point, each get a warning that says what not to trust.
+
+Catalog coordinates are ICRS. A header in another frame or projection (a
+Galactic-coordinate mosaic, a DSS plate solution, a `TPV` polynomial) is
+refitted to an ICRS tangent plane through astropy and the residual is kept in
+`image.wcs.derived_from`; without astropy such a header is read as written
+and labelled with its own axes rather than mislabelled as equatorial.
+
+Survey products come as several planes, and those are read as such:
+
+```python
+from astrovision.io import load_survey_image
+from astrovision.engine.tiles import process_tiled, standard_stage
+
+image, report = load_survey_image("c4d_r_ooi.fits.fz")   # SCI + MASK + WEIGHT
+print(report.notes)                                      # what the loader assumed
+
+result = process_tiled(image, standard_stage(), tile=2048, overlap=128)
+catalog = result.catalog                                 # a 16k frame in 2k tiles
+```
+
+The data-quality plane becomes the mask, the weight plane becomes the noise
+model, pixels already in electrons are recognised so the gain is not applied
+twice, and a frame too large to hold in memory several times over is processed
+in overlapping tiles and merged into one catalog. Add `--db survey.sqlite`
+to `astrovision analyze` and every field's catalog goes into one SQLite
+store with a HEALPix sky index, where detections of the same position across
+fields and epochs are linked into objects with histories:
+
+```bash
+astrovision db survey.sqlite cone 150.1 2.2 30      # everything within 30" of a position
+astrovision db survey.sqlite history 1234           # one object's detections over time
+astrovision vet field.fits --log verdicts.json      # a page where an astronomer decides
+astrovision vet alerts.avro --log verdicts.json     # the same page on an alert file, as received
+astrovision series epoch_*.fits --alerts out.avro   # transients as Avro alerts (ZTF vocabulary)
+astrovision alerts tns out.avro --reporter "Name"   # a TNS report drafted, never sent
+```
+
+The vetting page shows one candidate at a time with its cutouts, evidence
+and history; a verdict is one keystroke and is recorded under the reviewer's
+name beside what the model said. Given an alert file instead of an image it
+shows the packets as they came -- their cutouts, light curves and scores --
+so a broker's stream can be vetted with the same keys. Alerts are written and read in the
+community's Avro formats with a standard-library codec, and a Transient Name
+Server report can be drafted from one, with a named reporter, for a person to
+submit. Every run carries a manifest
+(configuration hash, code revision, dependency versions, seeds, input
+checksums) and a digest of its catalog, so a repeat run can be checked against
+it. With `pip install -e ".[benchmark]"` the catalog can be compared with
+photutils and SEP on the same pixels.
+
+---
+
+## Vetting
+
+```bash
+astrovision vet field.fits --log verdicts.json --db survey.sqlite
+```
+
+opens a local page that shows the ranked candidates one at a time, with the
+cutout, the background-subtracted cutout, the pipeline's evidence and caveats
+and the object's history across epochs. One key records a verdict under the
+reviewer's name, next to what the model said, into the same append-only log
+the active-learning loop trains from. No name, no verdict: this is the
+boundary the whole project keeps, implemented as a refused request.
 
 ---
 
@@ -348,7 +471,15 @@ values otherwise. Every assumption it had to make is listed in the report.
 pip install -e ".[all,dev]"
 pytest                           # the full suite
 pytest -m "not slow" -q          # quick run
+ruff check astrovision tests --select F,E9
 ```
+
+Continuous integration runs the suite in every environment the package
+claims to support, because "optional" is only true if it is tested:
+NumPy alone, NumPy 1.21 (the floor), the science stack, scikit-learn,
+PyTorch, and everything together with the benchmark tools, across Python
+3.9 to 3.12. Each job reports what it skipped, so a test that silently skips
+everywhere shows up in the summary.
 
 ## License
 

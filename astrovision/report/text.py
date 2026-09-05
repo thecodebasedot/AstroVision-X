@@ -198,6 +198,28 @@ def render_text(analysis: FieldAnalysis, title: str = "AstroVision-X Field Analy
         missing = ", ".join(k for k, v in sorted(capabilities.items()) if not v) or "none"
         lines += _wrap(f"Optional backends available: {available}", indent=2)
         lines += _wrap(f"Optional backends missing:   {missing}", indent=2)
+    manifest = report.get("manifest") or {}
+    if manifest:
+        git = manifest.get("git") or {}
+        lines.append("")
+        lines.append("  Reproducing this run:")
+        lines.append(f"    reproducibility key : {report.get('reproducibility_key')}")
+        lines.append(f"    configuration hash  : {manifest.get('config_hash')}")
+        lines.append(f"    code revision       : {git.get('revision') or 'not a git checkout'}"
+                     f"{'  (uncommitted changes)' if git.get('dirty') else ''}")
+        lines.append(f"    package / python    : {manifest.get('package_version')} / "
+                     f"{manifest.get('python')}")
+        deps = ", ".join(f"{k} {v}" for k, v in sorted(manifest.get("dependencies", {}).items()) if v)
+        lines += _wrap(f"dependencies        : {deps or 'none recorded'}", indent=4)
+        seeds = ", ".join(f"{k}={v}" for k, v in manifest.get("seeds", {}).items())
+        lines.append(f"    seeds               : {seeds or 'none'}")
+        for name, checksum in sorted((manifest.get("inputs") or {}).items()):
+            lines.append(f"    input {name:<14}: {checksum}")
+        digest = (manifest.get("outputs") or {}).get("catalog_digest")
+        if digest:
+            lines.append(f"    catalog digest      : {digest}")
+        for note in manifest.get("notes", []):
+            lines += _wrap(f"note: {note}", indent=4)
     physical = report.get("physical", {})
     for assumption in physical.get("assumptions", []):
         lines += _wrap(f"Assumption: {assumption}", indent=2)

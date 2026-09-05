@@ -146,7 +146,10 @@ def _csv_value(value: Any) -> Any:
     if isinstance(value, float):
         if not np.isfinite(value):
             return ""
-        return f"{value:.6g}"
+        # Ten significant digits, not six: at six a right ascension of
+        # 149.999 deg is only good to 3.6 arcseconds, and a catalog written
+        # to CSV and read back could no longer be matched to itself.
+        return f"{value:.10g}"
     return value
 
 

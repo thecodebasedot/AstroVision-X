@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -64,7 +65,7 @@ class AstroImage:
         image = cls(data=data, header=header,
                     name=kwargs.pop("name", os.path.basename(path)), **kwargs)
         image.wcs = image.wcs or wcs_from_header(header)
-        image.band = _first_key(header, _BAND_KEYS, image.band)
+        image.band = _header_band(header, image.band)
         image.exposure_time = _float_or_none(_first_key(header, _EXPTIME_KEYS, None))
         image.mjd = _header_time(header)
         image.meta.setdefault("source_path", os.path.abspath(path))
@@ -311,6 +312,19 @@ def _float_or_none(value: Any) -> Optional[float]:
         return None
 
 
+def _header_band(header: Dict[str, Any], default: str = "clear") -> str:
+    """The band from a filter keyword, or from an instrument channel number
+    (Spitzer IRAC writes ``CHNLNUM`` and no filter name)."""
+    band = _first_key(header, _BAND_KEYS, None)
+    if band not in (None, ""):
+        return str(band)
+    channel = header.get("CHNLNUM")
+    instrument = str(header.get("INSTRUME", "") or "").strip()
+    if channel not in (None, "") and instrument:
+        return f"{instrument}{channel}"
+    return default
+
+
 def _header_time(header: Dict[str, Any]) -> Optional[float]:
     """Extract an MJD from whichever time keyword the instrument wrote."""
     for key in ("MJD-OBS", "MJD", "EXPSTART"):
@@ -321,12 +335,23 @@ def _header_time(header: Dict[str, Any]) -> Optional[float]:
     if jd is not None:
         return jd - 2_400_000.5
     date = header.get("DATE-OBS")
-    if isinstance(date, str) and len(date) >= 10:
+    if isinstance(date, str) and len(date) >= 8:
+        import datetime as _dt
+        stamp = None
         try:
-            import datetime as _dt
-            stamp = _dt.datetime.fromisoformat(date.replace("Z", "+00:00").replace("T", "T"))
-            epoch = _dt.datetime(1858, 11, 17, tzinfo=stamp.tzinfo)
-            return (stamp - epoch).total_seconds() / 86400.0
+            stamp = _dt.datetime.fromisoformat(date.strip().replace("Z", "+00:00"))
         except (ValueError, TypeError):
+            # The pre-2000 FITS form, DD/MM/YY, still found on scanned
+            # plates: a two-digit year is a nineteen-hundreds year there.
+            match = re.match(r"^(\d{2})/(\d{2})/(\d{2})$", date.strip())
+            if match:
+                day, month, year = (int(v) for v in match.groups())
+                try:
+                    stamp = _dt.datetime(1900 + year, month, day)
+                except ValueError:
+                    stamp = None
+        if stamp is None:
             return None
+        epoch = _dt.datetime(1858, 11, 17, tzinfo=stamp.tzinfo)
+        return (stamp - epoch).total_seconds() / 86400.0
     return None

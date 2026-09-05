@@ -8,6 +8,7 @@ NumPy environment -- enough for catalog coordinates and cross-matching.
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple
 
@@ -40,6 +41,10 @@ class SimpleWCS:
     #: depending on coefficients many real headers simply do not carry.
     sip_ap: Optional[np.ndarray] = None
     sip_bp: Optional[np.ndarray] = None
+    #: How this WCS was obtained when it is not a direct reading of the
+    #: header: e.g. a refit of a galactic-frame or plate-solution WCS into an
+    #: ICRS tangent plane, with the residual of that refit.
+    derived_from: str = ""
 
     def __post_init__(self) -> None:
         if self.cd is None:
@@ -129,6 +134,19 @@ class SimpleWCS:
                 [float(header.get("CD1_1", 0.0)), float(header.get("CD1_2", 0.0))],
                 [float(header.get("CD2_1", 0.0)), float(header.get("CD2_2", 0.0))],
             ])
+        elif "PC1_1" in header or "PC2_2" in header:
+            # The PC + CDELT convention, which most modern survey headers
+            # use.  CD = PC * diag(CDELT).  Ignoring PC and falling through
+            # to CDELT with CROTA2 -- which this parser used to do -- silently
+            # drops the rotation and any skew, so every world coordinate is
+            # wrong by the field's rotation angle.
+            pc = np.array([
+                [float(header.get("PC1_1", 1.0)), float(header.get("PC1_2", 0.0))],
+                [float(header.get("PC2_1", 0.0)), float(header.get("PC2_2", 1.0))],
+            ])
+            cdelt = np.array([float(header.get("CDELT1", -1.0 / 3600.0)),
+                              float(header.get("CDELT2", 1.0 / 3600.0))])
+            cd = pc * cdelt[None, :]
         else:
             cdelt1 = float(header.get("CDELT1", -1.0 / 3600.0))
             cdelt2 = float(header.get("CDELT2", 1.0 / 3600.0))
@@ -228,11 +246,14 @@ class SimpleWCS:
         return header
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        out = {
             "crpix": list(self.crpix), "crval": list(self.crval),
             "cd": self.cd.tolist(), "ctype": list(self.ctype),
             "pixel_scale_arcsec": self.pixel_scale,
         }
+        if self.derived_from:
+            out["derived_from"] = self.derived_from
+        return out
 
 
 def _with_sip_suffix(ctype: str) -> str:
@@ -288,13 +309,166 @@ def angular_separation(ra1, dec1, ra2, dec2) -> np.ndarray:
     return np.degrees(np.arctan2(num, den))
 
 
+#: Header keys that carry a Digitized Sky Survey plate solution.  Astropy
+#: (through wcslib) translates them into a tangent-plane WCS; the built-in
+#: parser cannot, and the linear part alone is wrong by the plate's
+#: higher-order terms.
+_DSS_KEYS = ("PLTRAH", "AMDX1", "AMDY1")
+
+#: Grid used to refit a WCS this package cannot represent directly.
+_REFIT_GRID = 9
+#: A refit is accepted when it reproduces astropy's transform to this many
+#: pixels everywhere on the grid; it is tightened with SIP terms otherwise.
+_REFIT_TOLERANCE_PX = 0.01
+
+
+def _astropy_header(header: Dict[str, Any]) -> Dict[str, Any]:
+    """The header as astropy will take it.
+
+    Real headers carry things a strict FITS writer would refuse: the DSS
+    plates from STScI have a multi-line comment stored as a value, which
+    makes astropy raise on the whole header and lose a perfectly good
+    plate solution.  Comment cards are dropped and string values are cut
+    to printable ASCII; no WCS keyword is touched.
+    """
+    clean: Dict[str, Any] = {}
+    for key, value in header.items():
+        if key in ("COMMENT", "HISTORY", "", "CONTINUE"):
+            continue
+        if isinstance(value, str):
+            value = "".join(ch for ch in value if 32 <= ord(ch) < 127)[:68]
+        clean[str(key)] = value
+    return clean
+
+
+def _is_plain_equatorial_tan(aw, header: Dict[str, Any]) -> bool:
+    """True when the header is an equatorial TAN (optionally SIP) WCS the
+    built-in parser reads exactly, so there is nothing to refit.
+
+    Judged from the header's own cards: wcslib rewrites a ``TPV`` projection
+    as ``TAN`` with the polynomial kept elsewhere, so the parsed object can
+    say "TAN" about a header the linear parser would get wrong.
+    """
+    ctype = (str(header.get("CTYPE1", "")), str(header.get("CTYPE2", "")))
+    if not (ctype[0].startswith("RA---TAN") and ctype[1].startswith("DEC--TAN")):
+        return False
+    if any(c not in ("RA---TAN", "RA---TAN-SIP", "DEC--TAN", "DEC--TAN-SIP") for c in ctype):
+        return False
+    if any(key in header for key in _DSS_KEYS):
+        return False
+    if any(str(key).startswith("PV") for key in header):
+        return False
+    radesys = str(header.get("RADESYS", header.get("RADECSYS", "")) or "").strip().upper()
+    if radesys not in ("", "ICRS", "FK5"):
+        return False
+    equinox = header.get("EQUINOX", header.get("EPOCH", 2000.0))
+    try:
+        if abs(float(equinox) - 2000.0) > 1e-6:
+            return False
+    except (TypeError, ValueError):
+        return False
+    return "CRVAL1" in header and "CRVAL2" in header
+
+
+def _refit_tangent(aw, header: Dict[str, Any]) -> Optional[SimpleWCS]:
+    """An ICRS tangent-plane WCS fitted to astropy's transform.
+
+    Galactic or ecliptic frames, B1950 equinoxes, Cartesian and other
+    projections, and DSS plate solutions all come out of astropy as a
+    ``SkyCoord`` per pixel.  A grid of those, converted to ICRS, is fitted
+    with a TAN projection -- plus SIP terms when the linear fit leaves
+    more than a hundredth of a pixel -- and checked on the same grid.  Over
+    a single detector the residual is a ten-thousandth of a pixel; the
+    result is a WCS whose ``ra``/``dec`` really are ICRS.
+    """
+    utils = try_import("astropy.wcs.utils")
+    if utils is None or not hasattr(utils, "fit_wcs_from_points"):
+        return None
+    nx = int(header.get("NAXIS1", 0) or 0)
+    ny = int(header.get("NAXIS2", 0) or 0)
+    if nx <= 1 or ny <= 1:
+        shape = getattr(aw, "pixel_shape", None)
+        if shape and all(shape):
+            nx, ny = int(shape[0]), int(shape[1])
+        else:
+            cx, cy = (float(v) for v in aw.wcs.crpix[:2])
+            nx, ny = int(max(cx * 2, 64)), int(max(cy * 2, 64))
+    gx, gy = np.meshgrid(np.linspace(0, nx - 1, _REFIT_GRID),
+                         np.linspace(0, ny - 1, _REFIT_GRID))
+    gx, gy = gx.ravel(), gy.ravel()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        sky = aw.pixel_to_world(gx, gy)
+        if not hasattr(sky, "icrs"):
+            return None
+        icrs = sky.icrs
+        best = None
+        for degree in (None, 3):
+            fitted = utils.fit_wcs_from_points((gx, gy), icrs, projection="TAN",
+                                               sip_degree=degree)
+            px, py = fitted.world_to_pixel(icrs)
+            residual = float(np.nanmax(np.hypot(px - gx, py - gy)))
+            if best is None or residual < best[1]:
+                best = (fitted, residual, degree)
+            if residual <= _REFIT_TOLERANCE_PX:
+                break
+    fitted, residual, degree = best
+    if not np.isfinite(residual) or residual > 1.0:
+        log.warning("WCS refit to an ICRS tangent plane left %.2f px; positions "
+                    "from this WCS are unreliable", residual)
+        return None
+    cd = fitted.wcs.cd if fitted.wcs.has_cd() else fitted.pixel_scale_matrix
+    sip = {}
+    if getattr(fitted, "sip", None) is not None:
+        # Forward terms only: the fitted inverse polynomial is approximate
+        # (a few hundredths of a pixel), the iterative inverse is not.
+        sip = {"sip_a": np.asarray(fitted.sip.a, dtype=float),
+               "sip_b": np.asarray(fitted.sip.b, dtype=float)}
+    wcs = SimpleWCS(tuple(float(v) for v in fitted.wcs.crpix[:2]),
+                    tuple(float(v) for v in fitted.wcs.crval[:2]),
+                    np.asarray(cd, dtype=float), **sip)
+    # Check the package's own transform, not just astropy's fitted object.
+    ra, dec = wcs.pixel_to_world(gx, gy)
+    own = angular_separation(ra, dec, icrs.ra.deg, icrs.dec.deg) * 3600.0 / wcs.pixel_scale
+    residual = max(residual, float(np.nanmax(own)))
+    frame = "/".join(str(c) for c in list(aw.wcs.ctype)[:2])
+    if any(key in header for key in _DSS_KEYS):
+        frame = "DSS plate solution"
+    equinox = aw.wcs.equinox
+    if np.isfinite(equinox) and abs(equinox - 2000.0) > 1e-6:
+        frame += f" (equinox {equinox:g})"
+    wcs.derived_from = (f"refit of {frame} to an ICRS tangent plane"
+                        f"{' with SIP terms' if degree else ''}; "
+                        f"residual {residual:.4f} px on a {_REFIT_GRID}x{_REFIT_GRID} grid")
+    log.info("WCS: %s", wcs.derived_from)
+    return wcs
+
+
 def wcs_from_header(header: Dict[str, Any]) -> Optional[SimpleWCS]:
-    """Prefer Astropy's WCS validation when available, else parse directly."""
+    """The image's WCS, as an ICRS tangent plane.
+
+    With astropy installed the header is validated by it first.  A plain
+    equatorial TAN header is then read directly (keeping any SIP terms);
+    anything else astropy understands but this package's tangent-plane
+    model does not -- a galactic frame, a Cartesian projection, a DSS plate
+    solution -- is refitted so that pixel positions map to ICRS ``ra`` and
+    ``dec`` rather than to whatever the header's axes happened to be.
+    """
     astropy_wcs = try_import("astropy.wcs")
     if astropy_wcs is not None:
         try:
-            aw = astropy_wcs.WCS(dict(header))
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                aw = astropy_wcs.WCS(_astropy_header(header))
             if aw.has_celestial:
+                aw = aw.celestial
+                if _is_plain_equatorial_tan(aw, header):
+                    direct = SimpleWCS.from_header(header)
+                    if direct is not None:
+                        return direct
+                refit = _refit_tangent(aw, header)
+                if refit is not None:
+                    return refit
                 cd = aw.pixel_scale_matrix
                 crpix = tuple(float(v) for v in aw.wcs.crpix[:2])
                 crval = tuple(float(v) for v in aw.wcs.crval[:2])

@@ -61,6 +61,16 @@ The order is not arbitrary; each dependency is real.
 - **The known-object crossmatch comes after classification** and before the
   anomaly ranking, because what it changes is the priority of a *candidate*:
   an outlier that is already catalogued is not a discovery.
+- **Spectroscopy is a separate entry point, not a pipeline stage.** The
+  imaging pipeline runs over a field; a spectrum is one object on one slit,
+  and the two share templates and numerics but not a control flow. Inside it
+  the order is forced: no redshift without a wavelength solution, no line
+  ratios without a redshift, and each step records where it stopped.
+- **The mass model runs inside the lensing stage, after the arcs are found**,
+  because it needs positions along real arcs rather than the candidate's
+  summary numbers. It is also allowed to fail without removing the candidate:
+  detection and measurement are separate claims and are kept separate in the
+  record.
 - **The lensing search needs classification** because it only examines objects
   massive and early-type enough to lens; searching every source for arcs
   produces mostly false positives.
@@ -90,7 +100,10 @@ Three patterns are used, deliberately:
 
 1. **Transparent acceleration.** `convolve`, `label`, `median_filter` and
    friends use SciPy when it is present and a NumPy implementation otherwise.
-   The results are identical; only the speed differs.
+   The results are identical; only the speed differs. That sentence was
+   false for a year without anyone noticing -- see `validation.md` under
+   *Environments* -- and is now a test (`tests/test_fallbacks.py`) rather
+   than a claim.
 2. **Transparent substitution.** FITS reads through Astropy when available and
    through a self-contained parser otherwise. Both directions are tested
    against each other.
@@ -101,6 +114,18 @@ Three patterns are used, deliberately:
 Anomaly detection sits between (1) and (3): the autoencoder uses a non-linear
 PyTorch model when it can and a PCA-equivalent linear one when it cannot, and
 both are genuinely useful.
+
+A fourth kind of dependency is not used by the pipeline at all: photutils and
+SEP, under the `benchmark` extra, exist so that `validation.benchmark` can run
+them on the same pixels and report where this package agrees with them and
+where it does not. They are never on the path that produces a catalog.
+
+Two further things follow from wanting to run on survey frames. Every
+photometric routine works on the smallest rectangle that contains its aperture
+(`photometry.aperture.stamp_box`), never on the whole frame, and
+`engine.tiles` cuts a frame into overlapping tiles whose cores partition it,
+runs the stages per tile, and merges by core membership. The per-tile
+background is a feature; the per-tile PSF is not, so one PSF is shared.
 
 ## Configuration
 

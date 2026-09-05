@@ -119,6 +119,14 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         print(f"\n{path}: {_summarise(analysis)}")
         for kind, written_path in sorted(written.items()):
             print(f"  {kind:<14} {written_path}")
+        if getattr(args, "db", None):
+            from ..catalog import CatalogDB, ingest_analysis
+
+            with CatalogDB(args.db) as db:
+                stored = ingest_analysis(db, analysis, image)
+            print(f"  {'database':<14} {args.db}: field {stored.field_id}, "
+                  f"{stored.n_detections} detections, {stored.n_matched} matched to known "
+                  f"objects, {stored.n_new_objects} new")
         if analysis.warnings:
             print("  warnings:")
             for warning in analysis.warnings:
@@ -156,6 +164,13 @@ def cmd_series(args: argparse.Namespace) -> int:
         title=config.report.title, observer=config.report.observer,
         top_candidates=config.report.top_candidates,
         image=series.reference)
+    if getattr(args, "alerts", None):
+        from ..alerts import packets_from_analysis, write_alerts
+
+        packets = packets_from_analysis(analysis, series=series,
+                                        zero_point=config.photometry.zero_point)
+        n = write_alerts(args.alerts, packets)
+        print(f"  {'alerts':<14} {args.alerts} ({n} packets, ZTF vocabulary)")
 
     print(f"\n{len(paths)} epochs: {_summarise(analysis)}")
     vetted = [c for c in analysis.transients if "bogus" not in c.flags]
@@ -260,6 +275,149 @@ def cmd_config(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_db(args: argparse.Namespace) -> int:
+    """Query or fill the catalog database."""
+    from ..catalog import CatalogDB
+
+    with CatalogDB(args.database) as db:
+        if args.db_command == "info":
+            counts = db.counts()
+            print(f"{args.database}: {counts['fields']} fields, {counts['detections']} "
+                  f"detections, {counts['objects']} objects")
+            for row in db.fields():
+                print(f"  field {row['id']:<5} {row['name']:<30} band={row['band']} "
+                      f"mjd={row['mjd']} sources={row['n_sources']} "
+                      f"key={row['reproducibility_key']}")
+            return 0
+        if args.db_command == "ingest":
+            from ..io.catalog import read_catalog
+
+            for path in _expand(args.catalogs):
+                catalog = read_catalog(path)
+                report = db.ingest(catalog, name=args.name or os.path.basename(path),
+                                   band=args.band, mjd=args.mjd, path=path)
+                print(f"{path}: field {report.field_id}, {report.n_detections} detections, "
+                      f"{report.n_matched} matched, {report.n_new_objects} new objects "
+                      f"({report.seconds:.2f}s)")
+                for note in report.notes:
+                    print(f"  note: {note}")
+            return 0
+        if args.db_command == "cone":
+            rows = db.cone_search(args.ra, args.dec, args.radius, table=args.table,
+                                 limit=args.limit)
+            print(f"{len(rows)} {args.table} within {args.radius:g}\" of "
+                  f"({args.ra:.6f}, {args.dec:.6f})")
+            for row in rows:
+                if args.table == "detections":
+                    print(f"  {row['separation_arcsec']:6.2f}\"  object {row['object_id']}  "
+                          f"field {row['field_name']}  mjd {row['mjd']}  band {row['band']}  "
+                          f"flux {row['flux']}  mag {row['mag']}  class {row['class']}")
+                else:
+                    print(f"  {row['separation_arcsec']:6.2f}\"  object {row['id']}  "
+                          f"{row['n_detections']} detections  mjd {row['first_mjd']}-"
+                          f"{row['last_mjd']}  bands {row['bands']}")
+            return 0
+        if args.db_command == "history":
+            rows = db.history(args.object)
+            print(f"object {args.object}: {len(rows)} detections")
+            for row in rows:
+                print(f"  mjd {row['mjd']}  band {row['band']}  flux {row['flux']} "
+                      f"+/- {row['flux_err']}  mag {row['mag']}  field {row['field_name']}")
+            return 0
+    return 1
+
+
+def cmd_vet(args: argparse.Namespace) -> int:
+    """Analyse an image and open the vetting page for its candidates."""
+    from ..engine import Pipeline
+    from ..io.image import AstroImage
+    from ..vetting import build_queue, is_alert_file, queue_for_alert_file, serve
+
+    from ..preprocess import Preprocessor
+
+    if is_alert_file(args.image):
+        # An alert file: nothing to analyse, the packets carry their own
+        # cutouts, history and scores.  A database adds this package's own
+        # detections at each position to the history.
+        db = None
+        if args.db:
+            from ..catalog import CatalogDB
+            db = CatalogDB(args.db)
+        queue = queue_for_alert_file(args.image, limit=args.limit, db=db)
+        if len(queue) == 0:
+            print("nothing to vet: the alert file holds no packets")
+            return 0
+        print(f"{len(queue)} alert(s) to vet; verdicts go to {args.log}")
+        print(f"open http://{args.host}:{args.port}/  (Ctrl-C to stop)")
+        serve(queue, log_path=args.log, host=args.host, port=args.port,
+              open_browser=not args.no_browser, block=True)
+        return 0
+
+    config = _load_config(args)
+    image = AstroImage.load(args.image)
+    log.info("analysing %s for vetting", args.image)
+    # Preprocess here rather than inside the pipeline so the cleaned image,
+    # with its background model, is the one the cutouts are cut from: the
+    # page then shows the background-subtracted stamp beside the raw one.
+    clean = Preprocessor(config.preprocess).run(image)
+    analysis = Pipeline(config).run(clean, redshift=args.redshift, preprocess=False)
+    image = clean
+    db = None
+    if args.db:
+        from ..catalog import CatalogDB, ingest_analysis
+
+        db = CatalogDB(args.db)
+        stored = ingest_analysis(db, analysis, image)
+        print(f"stored in {args.db}: field {stored.field_id}, {stored.n_detections} "
+              f"detections, {stored.n_matched} matched, {stored.n_new_objects} new")
+    queue = build_queue(analysis, image, limit=args.limit, include_sources=args.all_sources,
+                        db=db)
+    if len(queue) == 0:
+        print("nothing to vet: no candidates and --all-sources not given")
+        return 0
+    print(f"{len(queue)} items to vet; verdicts go to {args.log}")
+    print(f"open http://{args.host}:{args.port}/  (Ctrl-C to stop)")
+    serve(queue, log_path=args.log, host=args.host, port=args.port,
+          open_browser=not args.no_browser, block=True)
+    return 0
+
+
+def cmd_alerts(args: argparse.Namespace) -> int:
+    """Read alert files, or draft a TNS report from one alert."""
+    from ..alerts import draft_tns_report, read_alerts, schema_of, write_tns_draft
+
+    if args.alerts_command == "read":
+        for path in _expand(args.files):
+            schema = schema_of(path)
+            _, packets = read_alerts(path)
+            print(f"{path}: {len(packets)} alerts, schema {schema.get('name')} "
+                  f"({len(schema.get('fields', []))} fields)")
+            for packet in packets[:args.limit]:
+                print("  " + packet.summary())
+            if len(packets) > args.limit:
+                print(f"  ... {len(packets) - args.limit} more")
+        return 0
+    if args.alerts_command == "tns":
+        _, packets = read_alerts(args.file)
+        chosen = [p for p in packets if args.candid is None or p.candid == args.candid]
+        if not chosen:
+            log.error("no alert with candid %s in %s", args.candid, args.file)
+            return 1
+        if len(chosen) > 1 and args.candid is None:
+            log.error("%d alerts in the file; choose one with --candid", len(chosen))
+            return 1
+        report = draft_tns_report(chosen[0], reporter=args.reporter,
+                                  reporting_group_id=args.group, data_source_id=args.source,
+                                  instrument_id=args.instrument, at_type=args.type,
+                                  remarks=args.remarks or "")
+        path = write_tns_draft(report, args.out)
+        print(f"TNS draft written to {path} (not submitted)")
+        for item in report["_todo"]:
+            print(f"  to do: {item}")
+        return 0
+    return 1
+
+
 def cmd_info(args: argparse.Namespace) -> int:
     """Report the installed version and which optional backends are present."""
     print(BANNER)
@@ -305,11 +463,13 @@ def build_parser() -> argparse.ArgumentParser:
     analyze.add_argument("images", nargs="+", help="FITS or image files")
     analyze.add_argument("--print-report", action="store_true",
                          help="print the text report to stdout as well")
+    analyze.add_argument("--db", help="also store the catalog in this SQLite database")
     add_common(analyze)
     analyze.set_defaults(func=cmd_analyze)
 
     series = subparsers.add_parser("series",
                                    help="analyse a multi-epoch series for transients")
+    series.add_argument("--alerts", help="also write the transient candidates as Avro alerts")
     series.add_argument("images", nargs="+", help="epoch files, in any order")
     series.add_argument("--name", help="name for the series")
     series.add_argument("--top", type=int, default=10,
@@ -351,6 +511,59 @@ def build_parser() -> argparse.ArgumentParser:
     config_parser.add_argument("--list-presets", action="store_true")
     add_common(config_parser)
     config_parser.set_defaults(func=cmd_config)
+
+    db = subparsers.add_parser("db", help="the catalog database: ingest, cone search, history")
+    db.add_argument("database", help="SQLite file (created if missing)")
+    db_sub = db.add_subparsers(dest="db_command", required=True)
+    db_info = db_sub.add_parser("info", help="counts and the fields stored")
+    db_ingest = db_sub.add_parser("ingest", help="store exported catalogs (csv/json)")
+    db_ingest.add_argument("catalogs", nargs="+")
+    db_ingest.add_argument("--name", help="field name (default: the file name)")
+    db_ingest.add_argument("--band")
+    db_ingest.add_argument("--mjd", type=float)
+    db_cone = db_sub.add_parser("cone", help="everything within a radius of a position")
+    db_cone.add_argument("ra", type=float, help="degrees")
+    db_cone.add_argument("dec", type=float, help="degrees")
+    db_cone.add_argument("radius", type=float, help="arcseconds")
+    db_cone.add_argument("--table", choices=["detections", "objects"], default="detections")
+    db_cone.add_argument("--limit", type=int)
+    db_history = db_sub.add_parser("history", help="every detection of one object")
+    db_history.add_argument("object", type=int)
+    for sub in (db_info, db_ingest, db_cone, db_history):
+        sub.set_defaults(func=cmd_db)
+
+    vet = subparsers.add_parser("vet", help="open a page to record verdicts on the candidates")
+    vet.add_argument("image", help="FITS or image file to analyse and vet, or an Avro "
+                                   "alert file whose packets are vetted as they are")
+    vet.add_argument("--log", default="verdicts.json",
+                     help="append-only verdict log (default: verdicts.json)")
+    vet.add_argument("--limit", type=int, default=40, help="how many ranked candidates")
+    vet.add_argument("--all-sources", action="store_true",
+                     help="queue every catalog source after the candidates")
+    vet.add_argument("--db", help="also store the catalog here and show object histories")
+    vet.add_argument("--host", default="127.0.0.1")
+    vet.add_argument("--port", type=int, default=8765)
+    vet.add_argument("--no-browser", action="store_true", help="do not open a browser")
+    add_common(vet)
+    vet.set_defaults(func=cmd_vet)
+
+    alerts = subparsers.add_parser("alerts", help="read Avro alert files; draft TNS reports")
+    alerts_sub = alerts.add_subparsers(dest="alerts_command", required=True)
+    alerts_read = alerts_sub.add_parser("read", help="summarise alerts in Avro files")
+    alerts_read.add_argument("files", nargs="+")
+    alerts_read.add_argument("--limit", type=int, default=20)
+    alerts_tns = alerts_sub.add_parser("tns", help="draft a TNS report for one alert (never sent)")
+    alerts_tns.add_argument("file")
+    alerts_tns.add_argument("--reporter", required=True, help="your name, as the TNS will show it")
+    alerts_tns.add_argument("--candid", type=int, help="which alert, when the file holds several")
+    alerts_tns.add_argument("--out", default="tns_draft.json")
+    alerts_tns.add_argument("--group", type=int, default=0, help="TNS reporting group id")
+    alerts_tns.add_argument("--source", type=int, default=0, help="TNS data source id")
+    alerts_tns.add_argument("--instrument", type=int, default=0, help="TNS instrument id")
+    alerts_tns.add_argument("--type", default="other", help="other, supernova, nova, agn, tde, fbot")
+    alerts_tns.add_argument("--remarks")
+    for sub in (alerts_read, alerts_tns):
+        sub.set_defaults(func=cmd_alerts)
 
     info = subparsers.add_parser("info", help="show version and available backends")
     info.set_defaults(func=cmd_info)

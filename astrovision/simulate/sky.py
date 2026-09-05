@@ -29,6 +29,7 @@ from .profiles import (
     spiral_pattern,
     supersample,
 )
+from ..lensing.model import LensModel, ray_trace
 from .sed import flux_ratios, object_colours, sed_colours
 
 log = get_logger("simulate.sky")
@@ -375,7 +376,8 @@ class SkySimulator:
                            r_eff=radius, meta={"n_members": int(n_members)})
 
     def add_lens_system(self, canvas: np.ndarray, x: float, y: float,
-                        flux: float, arc_scale: float = 1.0) -> TruthObject:
+                        flux: float, arc_scale: float = 1.0,
+                        ray_traced: bool = True) -> TruthObject:
         """Render an elliptical deflector surrounded by lensed arcs.
 
         ``arc_scale`` brightens or dims the arcs relative to the deflector
@@ -400,24 +402,58 @@ class SkySimulator:
             r_eff * (s[0] / shape[0]), 4.0), factor=3)
         deflector *= 0.72 * flux / max(deflector.sum(), 1e-9)
 
-        arcs = np.zeros(shape, dtype=float)
-        n_arcs = int(rng.integers(2, 5))
-        base_pa = float(rng.uniform(0, 360))
-        for k in range(n_arcs):
-            arcs += einstein_arc(
-                shape, centre, theta_e * float(rng.uniform(0.92, 1.08)),
-                float(rng.uniform(1.0, 2.2)),
-                float(rng.uniform(45, 110)),
-                base_pa + 360.0 * k / n_arcs + float(rng.uniform(-18, 18)),
-                float(rng.uniform(0.5, 1.0)))
-        if arcs.sum() > 0:
-            arcs *= 0.28 * flux * float(arc_scale) / arcs.sum()
+        lens_meta: Dict[str, Any] = {}
+        if ray_traced:
+            # Arcs produced by a mass distribution, not painted at a chosen
+            # radius.  The difference matters for anything that tries to
+            # *measure* a lens: arcs drawn at radius R reward a fit for
+            # recovering R, while arcs traced through a mass model test
+            # whether the fit can recover the mass.
+            shear1 = float(rng.normal(0.0, 0.04))
+            shear2 = float(rng.normal(0.0, 0.04))
+            model = LensModel(x0=centre[0], y0=centre[1], theta_e=theta_e,
+                              axis_ratio=deflector_q, position_angle=pa,
+                              shear1=shear1, shear2=shear2)
+            # Inside the caustic gives multiple images and arcs; the offset is
+            # drawn small enough that most systems are genuinely strong lenses.
+            offset = float(rng.uniform(0.05, 0.55)) * theta_e * (1.0 - deflector_q + 0.2)
+            angle = float(rng.uniform(0, 2 * np.pi))
+            source_x = centre[0] + offset * np.cos(angle)
+            source_y = centre[1] + offset * np.sin(angle)
+            source_radius = theta_e * float(rng.uniform(0.08, 0.18))
+            arcs = ray_trace(shape, model, source_x, source_y, source_radius,
+                             source_flux=0.28 * flux * float(arc_scale),
+                             sersic_n=1.0)
+            n_arcs = 0
+            lens_meta = {
+                "ray_traced": True,
+                "axis_ratio": deflector_q,
+                "position_angle": pa,
+                "shear1": shear1, "shear2": shear2,
+                "source_offset": [float(source_x - centre[0]),
+                                  float(source_y - centre[1])],
+                "source_radius": source_radius,
+            }
+        else:
+            arcs = np.zeros(shape, dtype=float)
+            n_arcs = int(rng.integers(2, 5))
+            base_pa = float(rng.uniform(0, 360))
+            for k in range(n_arcs):
+                arcs += einstein_arc(
+                    shape, centre, theta_e * float(rng.uniform(0.92, 1.08)),
+                    float(rng.uniform(1.0, 2.2)),
+                    float(rng.uniform(45, 110)),
+                    base_pa + 360.0 * k / n_arcs + float(rng.uniform(-18, 18)),
+                    float(rng.uniform(0.5, 1.0)))
+            if arcs.sum() > 0:
+                arcs *= 0.28 * flux * float(arc_scale) / arcs.sum()
+            lens_meta = {"ray_traced": False}
 
-        stamp = convolve(deflector + arcs, self._psf_kernel())
+        stamp = convolve(deflector + arcs, self._psf_kernel(position=(x, y)))
         canvas[region] += stamp
         return TruthObject(self._new_id(), x, y, "lens", flux, "elliptical",
                            r_eff=r_eff, lensed=True, einstein_radius=theta_e,
-                           meta={"n_arcs": n_arcs})
+                           meta={"n_arcs": n_arcs, **lens_meta})
 
     def add_anomaly(self, canvas: np.ndarray, x: float, y: float,
                     flux: float) -> TruthObject:

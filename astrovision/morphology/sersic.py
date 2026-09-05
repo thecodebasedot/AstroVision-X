@@ -16,7 +16,7 @@ import numpy as np
 
 from ..core.backend import try_import
 from ..core.logging import get_logger
-from ..core.numeric import as_float_image, convolve, nan_to_finite, radial_profile
+from ..core.numeric import as_float_image, nan_to_finite, radial_profile
 from ..simulate.profiles import sersic_bn, sersic_profile
 
 log = get_logger("morphology.sersic")
@@ -166,14 +166,22 @@ def fit_sersic_2d(cutout: np.ndarray, centre: Optional[Tuple[float, float]] = No
 
     optimize = try_import("scipy.optimize")
 
-    yy, xx = np.mgrid[0:ny, 0:nx]
     kernel = _compact_kernel(psf)
+    convolver = None if kernel is None else _PaddedConvolver(kernel, data.shape)
 
     # The centroid is already measured to a fraction of a pixel by the
     # detection stage, so it is held fixed: five free parameters converge
     # several times faster than seven, and the model must be re-convolved
     # on every function evaluation.
     cx, cy = float(centre[0]), float(centre[1])
+    if convolver is not None:
+        # Rendered on a grid one kernel half-width wider than the cutout,
+        # so the convolution sees the real profile beyond the edge instead
+        # of a reflected or zeroed copy of it.
+        pad = convolver.pad
+        yy, xx = np.mgrid[-pad:ny + pad, -pad:nx + pad]
+    else:
+        yy, xx = np.mgrid[0:ny, 0:nx]
     dx0, dy0 = xx - cx, yy - cy
 
     # The fit region has to be scaled to the object.  Restricted to the
@@ -198,7 +206,7 @@ def fit_sersic_2d(cutout: np.ndarray, centre: Optional[Tuple[float, float]] = No
         yr = -dx0 * np.sin(theta) + dy0 * np.cos(theta)
         r = np.sqrt(xr ** 2 + (yr / max(q, 0.05)) ** 2)
         rendered = sersic_profile(r, 1.0, max(r_eff, 0.3), float(np.clip(n, 0.2, 10.0)))
-        return convolve(rendered, kernel) if kernel is not None else rendered
+        return convolver(rendered) if convolver is not None else rendered
 
     def model(params: np.ndarray) -> np.ndarray:
         amplitude, r_eff, n, q, pa, sky = params
@@ -369,6 +377,35 @@ def _robust_noise(data: np.ndarray, footprint: Optional[np.ndarray] = None) -> f
     if values.size < 10:
         return 1.0
     return float(max(1.4826 * np.median(np.abs(values - np.median(values))), 1e-9))
+
+
+class _PaddedConvolver:
+    """Exact convolution of a model rendered on a padded grid, by FFT.
+
+    The kernel's transform is computed once per fit and reused for every
+    optimiser evaluation; with a numerical Jacobian that is a few hundred
+    convolutions per source, and the FFT is ten to twenty times faster
+    than direct correlation at these sizes.  The model comes in rendered
+    ``pad`` pixels beyond the cutout on every side, so the result inside
+    the cutout is the true convolution with no edge assumption at all.
+    """
+
+    def __init__(self, kernel: np.ndarray, shape: Tuple[int, int]) -> None:
+        self.kernel = np.asarray(kernel, dtype=float)
+        ky, kx = self.kernel.shape
+        self.pad = max(ky, kx) // 2
+        self.ny, self.nx = int(shape[0]), int(shape[1])
+        py, px = self.ny + 2 * self.pad, self.nx + 2 * self.pad
+        self.fft_shape = (py + ky - 1, px + kx - 1)
+        self.kernel_fft = np.fft.rfft2(self.kernel, self.fft_shape)
+        # Where the cutout sits in the full linear-convolution output.
+        self.offset = (self.pad + ky // 2, self.pad + kx // 2)
+
+    def __call__(self, padded_model: np.ndarray) -> np.ndarray:
+        full = np.fft.irfft2(np.fft.rfft2(padded_model, self.fft_shape) * self.kernel_fft,
+                             self.fft_shape)
+        oy, ox = self.offset
+        return full[oy:oy + self.ny, ox:ox + self.nx]
 
 
 def _compact_kernel(psf: Optional[np.ndarray], max_size: int = 11) -> Optional[np.ndarray]:

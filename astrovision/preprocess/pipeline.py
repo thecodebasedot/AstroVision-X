@@ -110,6 +110,22 @@ class Preprocessor:
         report["background_median"] = float(np.median(background))
         report["background_rms_median"] = float(np.median(rms))
 
+        if image.uncertainty is not None:
+            # A survey product arrives with its own noise plane -- a variance
+            # or weight map that knows about flat-field structure, exposure
+            # depth and source Poisson noise, none of which a background
+            # estimate can see.  Until this check, that plane was overwritten
+            # here by the estimate and the photometer never saw it.  The two
+            # are combined pixelwise by maximum: the survey plane already
+            # carries source noise, the estimate carries the sky, and taking
+            # the larger never understates either.
+            supplied = np.where(np.isfinite(image.uncertainty)
+                                & (image.uncertainty > 0),
+                                image.uncertainty, rms)
+            rms = np.maximum(rms, supplied)
+            report["noise_plane"] = "survey uncertainty combined with estimate"
+            report["steps"].append("survey_noise_plane")
+
         if cfg.subtract_background:
             data = data - background
             report["steps"].append("background_subtraction")

@@ -21,13 +21,17 @@ def curve_of_growth(image: np.ndarray, centre: Tuple[float, float],
                     radii: Sequence[float], background: float = 0.0
                     ) -> Tuple[np.ndarray, np.ndarray]:
     """Enclosed flux versus radius; returns ``(radii, cumulative_flux)``."""
-    from .aperture import circular_aperture_weights
+    from .aperture import circular_aperture_block, stamp_box
 
-    data = np.nan_to_num(as_float_image(image), nan=0.0) - float(background)
+    data = as_float_image(image)
+    reach = float(max(radii)) + 3.0 if len(radii) else 3.0
+    rows, cols, local = stamp_box(data.shape, centre, reach)
+    block = np.nan_to_num(data[rows, cols], nan=0.0) - float(background)
     fluxes = []
     for radius in radii:
-        weights = circular_aperture_weights(data.shape, centre, radius, subpixels=4)
-        fluxes.append(float((data * weights).sum()))
+        weights, (y0, y1, x0, x1) = circular_aperture_block(block.shape, local, radius,
+                                                            subpixels=4)
+        fluxes.append(float((block[y0:y1, x0:x1] * weights).sum()))
     return np.asarray(radii, dtype=float), np.asarray(fluxes, dtype=float)
 
 
@@ -40,14 +44,17 @@ def kron_radius(image: np.ndarray, centre: Tuple[float, float],
     typical galaxy regardless of its profile shape -- the basis of
     SExtractor's ``MAG_AUTO``.
     """
-    data = np.nan_to_num(as_float_image(image), nan=0.0) - float(background)
-    ny, nx = data.shape
-    yy, xx = np.mgrid[0:ny, 0:nx]
-    r = np.hypot(xx - centre[0], yy - centre[1])
+    from .aperture import stamp_box
+
+    data = as_float_image(image)
+    rows, cols, local = stamp_box(data.shape, centre, float(max_radius) + 1.0)
+    block = np.nan_to_num(data[rows, cols], nan=0.0) - float(background)
+    yy, xx = np.mgrid[0:block.shape[0], 0:block.shape[1]]
+    r = np.hypot(xx - local[0], yy - local[1])
     within = r <= float(max_radius)
     if mask is not None:
-        within &= np.asarray(mask, dtype=bool)
-    weights = np.clip(data, 0, None) * within
+        within &= np.asarray(mask, dtype=bool)[rows, cols]
+    weights = np.clip(block, 0, None) * within
     total = float(weights.sum())
     if total <= 0:
         return float("nan")
@@ -62,10 +69,13 @@ def petrosian_radius(image: np.ndarray, centre: Tuple[float, float], eta: float 
     The Petrosian radius is independent of distance and of the depth of
     the image, which is why large surveys use it for galaxy sizes.
     """
-    data = np.nan_to_num(as_float_image(image), nan=0.0) - float(background)
-    ny, nx = data.shape
-    yy, xx = np.mgrid[0:ny, 0:nx]
-    r = np.hypot(xx - centre[0], yy - centre[1])
+    from .aperture import stamp_box
+
+    rows, cols, local = stamp_box(as_float_image(image).shape, centre,
+                                  1.1 * float(max_radius) + 1.0)
+    data = np.nan_to_num(as_float_image(image)[rows, cols], nan=0.0) - float(background)
+    yy, xx = np.mgrid[0:data.shape[0], 0:data.shape[1]]
+    r = np.hypot(xx - local[0], yy - local[1])
     edges = np.linspace(0.5, float(max_radius), int(n_steps))
 
     ratios = []
