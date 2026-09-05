@@ -16,6 +16,8 @@ end.
 
 from __future__ import annotations
 
+import math
+
 import gzip
 import os
 import tempfile
@@ -82,13 +84,19 @@ def decode_stamp(record: Optional[Dict[str, Any]]) -> Optional[np.ndarray]:
     if fmt == "f4le":
         width, height = int(record.get("width", 0)), int(record.get("height", 0))
         return np.frombuffer(data, dtype="<f4").reshape(height, width).astype(float)
-    if data[:2] == b"\x1f\x8b":
-        data = gzip.decompress(data)
-    with tempfile.TemporaryDirectory() as tmp:
-        path = os.path.join(tmp, "stamp.fits")
-        with open(path, "wb") as handle:
-            handle.write(data)
-        pixels, _ = read_fits(path)
+    try:
+        if data[:2] == b"\x1f\x8b":
+            data = gzip.decompress(data)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "stamp.fits")
+            with open(path, "wb") as handle:
+                handle.write(data)
+            pixels, _ = read_fits(path)
+    except Exception as exc:
+        # A stamp that is not what it claims must not take the packet down
+        # with it: the light curve and the scores are still worth reading.
+        log.debug("cutout %r could not be decoded (%s)", record.get("fileName"), exc)
+        return None
     return np.asarray(pixels, dtype=float)
 
 
@@ -108,6 +116,9 @@ class Detection:
     dec: Optional[float] = None
     candid: Optional[int] = None
     is_positive: Optional[bool] = None
+    #: True for a forced-photometry point (ZTF ``fp_hists``): a flux
+    #: measured at the position whether or not anything was detected there.
+    forced: bool = False
 
     @property
     def is_detection(self) -> bool:
@@ -315,6 +326,27 @@ class AlertPacket:
                 candid=prv.get("candid"),
                 is_positive=None if prv.get("isdiffpos") is None
                 else str(prv.get("isdiffpos")).lower() in ("t", "1", "true")))
+        # ZTF's forced photometry (schema 4.x): difference fluxes in DN at
+        # the object's position for the last month of epochs.  Kept as flux
+        # points with the epoch's zero point applied where it is given, so a
+        # light curve can be drawn from a single packet.
+        for forced in record.get("fp_hists") or []:
+            if forced is None or forced.get("forcediffimflux") is None:
+                continue
+            flux = float(forced["forcediffimflux"])
+            err = forced.get("forcediffimfluxunc")
+            err = None if err is None else float(err)
+            zero_point = forced.get("magzpsci")
+            mag = mag_err = None
+            if zero_point is not None and flux > 0 and err and flux / err >= 3.0:
+                mag = float(zero_point) - 2.5 * math.log10(flux)
+                mag_err = flux_err_to_mag_err(flux, err)
+            fband = FID_TO_BAND.get(int(forced.get("fid", 0) or 0), "clear")
+            packet.history.append(Detection(
+                mjd=jd_to_mjd(float(forced.get("jd", MJD_OFFSET))), band=str(fband),
+                mag=mag, mag_err=mag_err, flux=flux, flux_err=err,
+                limiting_mag=forced.get("diffmaglim"), ra=forced.get("ranr"),
+                dec=forced.get("decnr"), is_positive=flux > 0, forced=True))
         packet.cutout_science = decode_stamp(record.get("cutoutScience"))
         packet.cutout_template = decode_stamp(record.get("cutoutTemplate"))
         packet.cutout_difference = decode_stamp(record.get("cutoutDifference"))
@@ -357,6 +389,27 @@ class AlertPacket:
                 mjd=float(limit.get("midpointMjdTai", limit.get("midPointTai", 0.0)) or 0.0),
                 band=str(limit.get("band", limit.get("filterName", "clear"))),
                 flux=f, flux_err=e))
+        # ZTF's forced photometry (schema 4.x): difference fluxes in DN at
+        # the object's position for the last month of epochs.  Kept as flux
+        # points with the epoch's zero point applied where it is given, so a
+        # light curve can be drawn from a single packet.
+        for forced in record.get("fp_hists") or []:
+            if forced is None or forced.get("forcediffimflux") is None:
+                continue
+            flux = float(forced["forcediffimflux"])
+            err = forced.get("forcediffimfluxunc")
+            err = None if err is None else float(err)
+            zero_point = forced.get("magzpsci")
+            mag = mag_err = None
+            if zero_point is not None and flux > 0 and err and flux / err >= 3.0:
+                mag = float(zero_point) - 2.5 * math.log10(flux)
+                mag_err = flux_err_to_mag_err(flux, err)
+            fband = FID_TO_BAND.get(int(forced.get("fid", 0) or 0), "clear")
+            packet.history.append(Detection(
+                mjd=jd_to_mjd(float(forced.get("jd", MJD_OFFSET))), band=str(fband),
+                mag=mag, mag_err=mag_err, flux=flux, flux_err=err,
+                limiting_mag=forced.get("diffmaglim"), ra=forced.get("ranr"),
+                dec=forced.get("decnr"), is_positive=flux > 0, forced=True))
         packet.cutout_science = decode_stamp(record.get("cutoutScience"))
         packet.cutout_template = decode_stamp(record.get("cutoutTemplate"))
         packet.cutout_difference = decode_stamp(record.get("cutoutDifference"))

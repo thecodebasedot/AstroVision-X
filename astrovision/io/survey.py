@@ -49,8 +49,8 @@ import numpy as np
 from ..core.backend import try_import
 from ..core.exceptions import DataError
 from ..core.logging import get_logger
-from .image import AstroImage, _first_key, _float_or_none, _header_time
-from .image import _BAND_KEYS, _EXPTIME_KEYS
+from .image import AstroImage, _first_key, _float_or_none, _header_band, _header_time
+from .image import _EXPTIME_KEYS
 from .wcs import wcs_from_header
 
 log = get_logger("io.survey")
@@ -284,7 +284,7 @@ def load_survey_image(path: str, mask_bits: Optional[int] = None,
             mask=mask if mask.any() else None,
             uncertainty=uncertainty,
             name=name or os.path.basename(path),
-            band=str(_first_key(header, _BAND_KEYS, "clear")),
+            band=_header_band(header, "clear"),
             exposure_time=_float_or_none(_first_key(header, _EXPTIME_KEYS, None)),
             mjd=_header_time(header))
         image.meta.update({"source_path": os.path.abspath(path),

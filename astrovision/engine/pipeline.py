@@ -51,6 +51,10 @@ from .assistant import ResearchAssistant
 
 log = get_logger("engine.pipeline")
 
+#: Below this PSF FWHM (pixels) a source's extent cannot be measured, and
+#: everything that depends on "resolved" is reported with a warning.
+UNDERSAMPLED_FWHM_PX = 2.0
+
 #: Conventional blue-to-red ordering, so that a default colour pair is a
 #: colour and not its negative.  Unknown names keep their given order after
 #: the ones that are recognised.
@@ -472,6 +476,33 @@ class Pipeline:
         return analysis
 
     # -- finalisation -------------------------------------------------------
+    def _data_quality_warnings(self, analysis: FieldAnalysis, image: AstroImage) -> None:
+        """Say plainly when the data cannot support what the later stages do.
+
+        Both came from running real images.  A Spitzer IRAC frame with a
+        1.7-pixel PSF classified three-quarters of a Galactic-plane star
+        field as galaxies and flagged hundreds of lens candidates: at that
+        sampling the resolved/unresolved distinction the classifier, the
+        morphology and the lens search all rest on does not exist.  And an
+        image in MJy/sr with no zero point in its header was reported in
+        magnitudes that meant nothing.
+        """
+        psf = image.meta.get("psf_model")
+        fwhm = float(getattr(psf, "fwhm", np.nan)) if psf is not None else np.nan
+        if np.isfinite(fwhm) and fwhm < UNDERSAMPLED_FWHM_PX:
+            analysis.warn(
+                f"PSF FWHM {fwhm:.2f} px: the image is undersampled, so star/galaxy "
+                "separation, morphology and the lens search cannot tell resolved from "
+                "unresolved; treat every extended-source class and lens candidate as "
+                "unverified")
+        load = image.meta.get("survey_load") or {}
+        if load and "MAGZP" not in image.header:
+            unit = load.get("unit") or "unknown units"
+            analysis.warn(
+                f"no photometric zero point in the header (pixels in {unit}); "
+                f"magnitudes assume the configured zero point "
+                f"{self.config.photometry.zero_point:g} and are instrumental")
+
     def _finish(self, analysis: FieldAnalysis, image: AstroImage, started: float,
                 redshift: Optional[float]) -> FieldAnalysis:
         """Attach statistics, physical properties, provenance and narrative."""
@@ -494,6 +525,7 @@ class Pipeline:
             return {"n_sources": len(analysis.catalog)}
 
         self._stage("statistics", True, statistics, analysis)
+        self._data_quality_warnings(analysis, image)
 
         analysis.provenance = {
             "pipeline": cfg.name,

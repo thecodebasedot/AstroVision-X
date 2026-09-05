@@ -184,6 +184,15 @@ statistics comparable between objects.
 
 With all three: 11 % median error on the index across 1.0 ≤ n ≤ 6.0.
 
+The convolution is where the fit spends its time -- a numerical Jacobian
+means some 150 model evaluations per source, each convolved. The model is
+rendered on a grid one kernel half-width wider than the cutout and convolved
+by FFT with the kernel's transform computed once per fit, so the result
+inside the cutout is the exact linear convolution with nothing assumed about
+the profile beyond the edge, and it is ten to twenty times faster than direct
+correlation at these sizes. A Spitzer mosaic with 3200 sources to fit is
+what made that matter.
+
 **Spiral arms and bars.** In log-polar coordinates a logarithmic spiral becomes
 a straight ridge, and an azimuthal Fourier decomposition measures how many arms
 there are. But amplitude alone does not identify arms: a flattened galaxy
@@ -1072,12 +1081,11 @@ to 0.866 — and three of the five do not reach that threshold. At small
 budgets the spread is the finding, so the study repeats every budget and
 reports the spread rather than the first number it saw.
 
-**No real survey data was used.** Nothing outside the package registries was
-reachable from the environment this was written in, so the loaders are
-exercised against files written in the same formats rather than against
-archive files, and the domain shift is measured between two simulated
-instruments. What that buys is the *method* and the shape of the answer; what
-it does not buy is a number for any particular survey.
+**No labelled real survey data was used.** Real images have been through the
+loaders and the pipeline (see the survey section below, and `validation.md`),
+but none came with labels, so the domain shift is measured between two
+simulated instruments. What that buys is the *method* and the shape of the
+answer; what it does not buy is a number for any particular survey.
 
 ## Reading what a survey actually delivers
 
@@ -1107,10 +1115,28 @@ emit — was being read as if it had no rotation, and every world coordinate
 was off by the field's rotation angle. And a frame past a few tens of
 megapixels is memory-mapped, so a 4 GB mosaic is opened rather than loaded.
 
-None of this was tested on an archive file: nothing outside the package
-registries was reachable from the environment it was written in. It is tested
-on files written in the same layout, which proves the conventions are handled
-and does not prove that any particular survey's are.
+Three archive images -- a Digitized Sky Survey plate scan, a Spitzer IRAC
+mosaic and an IRAC PSF stamp -- were run later, and each broke something the
+files written here had not. The plate's header holds a two-line string as a
+card value; astropy refuses such a header outright, and with it went
+wcslib's translation of the plate solution, so the frame was reported
+without a WCS at the wrong pixel scale. Headers are now cut to printable
+ASCII before astropy sees them. The mosaic's axes are Galactic longitude and
+latitude in a Cartesian projection, and the tangent-plane parser wrote them
+into the catalog's `ra` and `dec`. The rule now is that the catalog's
+coordinates are ICRS or nothing: any WCS astropy understands that is not a
+plain equatorial TAN -- another frame, another projection, a plate solution,
+a `TPV` polynomial -- is refitted, by sending a grid of pixels through
+astropy's transform to ICRS and fitting a TAN projection to the result, with
+SIP terms when the linear fit leaves more than a hundredth of a pixel. The
+residual of that fit, checked through this package's own transform, is
+written into `wcs.derived_from`; it is a ten-thousandth of a pixel on the
+plate and three thousandths on the mosaic. The pre-2000 date form
+(`29/11/51`) and an instrument channel number in place of a filter name
+(`CHNLNUM = 2` on IRAC) are read too. What the mosaic taught about
+*sampling* is under the classifier: at 1.7 pixels FWHM a blended pair is
+extended by every definition, and the report says so now rather than
+listing lens candidates.
 
 ## Checking against codes that have been checked
 
