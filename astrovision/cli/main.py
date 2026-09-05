@@ -331,9 +331,27 @@ def cmd_vet(args: argparse.Namespace) -> int:
     """Analyse an image and open the vetting page for its candidates."""
     from ..engine import Pipeline
     from ..io.image import AstroImage
-    from ..vetting import build_queue, serve
+    from ..vetting import build_queue, is_alert_file, queue_for_alert_file, serve
 
     from ..preprocess import Preprocessor
+
+    if is_alert_file(args.image):
+        # An alert file: nothing to analyse, the packets carry their own
+        # cutouts, history and scores.  A database adds this package's own
+        # detections at each position to the history.
+        db = None
+        if args.db:
+            from ..catalog import CatalogDB
+            db = CatalogDB(args.db)
+        queue = queue_for_alert_file(args.image, limit=args.limit, db=db)
+        if len(queue) == 0:
+            print("nothing to vet: the alert file holds no packets")
+            return 0
+        print(f"{len(queue)} alert(s) to vet; verdicts go to {args.log}")
+        print(f"open http://{args.host}:{args.port}/  (Ctrl-C to stop)")
+        serve(queue, log_path=args.log, host=args.host, port=args.port,
+              open_browser=not args.no_browser, block=True)
+        return 0
 
     config = _load_config(args)
     image = AstroImage.load(args.image)
@@ -515,7 +533,8 @@ def build_parser() -> argparse.ArgumentParser:
         sub.set_defaults(func=cmd_db)
 
     vet = subparsers.add_parser("vet", help="open a page to record verdicts on the candidates")
-    vet.add_argument("image", help="FITS or image file to analyse and vet")
+    vet.add_argument("image", help="FITS or image file to analyse and vet, or an Avro "
+                                   "alert file whose packets are vetted as they are")
     vet.add_argument("--log", default="verdicts.json",
                      help="append-only verdict log (default: verdicts.json)")
     vet.add_argument("--limit", type=int, default=40, help="how many ranked candidates")

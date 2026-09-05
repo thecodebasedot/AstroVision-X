@@ -63,8 +63,8 @@ PAGE = r"""<!doctype html>
 <main>
   <section>
     <div class="stamps">
-      <div class="stamp"><img id="stamp" alt="cutout"><div class="cap">image, asinh stretch</div></div>
-      <div class="stamp" id="subwrap"><img id="stamp_sub" alt="background-subtracted cutout"><div class="cap">background subtracted</div></div>
+      <div class="stamp"><img id="stamp" alt="cutout"><div class="cap" id="stampcap">image, asinh stretch</div></div>
+      <div class="stamp" id="subwrap"><img id="stamp_sub" alt="background-subtracted cutout"><div class="cap" id="stampsubcap">background subtracted</div></div>
     </div>
     <div class="card" style="margin-top:14px">
       <h2>Verdict</h2>
@@ -115,7 +115,11 @@ what the model said so the two can be compared later.</p>
   }
   function fmt(v) {
     if (v === null || v === undefined) return '—';
-    if (typeof v === 'number') return Math.abs(v) >= 1000 || Math.abs(v) < 0.01 && v !== 0 ? v.toPrecision(4) : v.toFixed(3).replace(/\.?0+$/, '');
+    if (typeof v === 'number') {
+      if (Number.isInteger(v)) return v.toString();                 // ids and counts, in full
+      if (Math.abs(v) >= 1000) return v.toFixed(3).replace(/\.?0+$/, '');   // epochs, fluxes
+      return Math.abs(v) < 0.01 && v !== 0 ? v.toPrecision(4) : v.toFixed(3).replace(/\.?0+$/, '');
+    }
     if (Array.isArray(v)) return v.length ? v.join(', ') : '—';
     return String(v);
   }
@@ -132,27 +136,39 @@ what the model said so the two can be compared later.</p>
     ul.innerHTML = '';
     (items && items.length ? items : ['—']).forEach(t => { const li = document.createElement('li'); li.textContent = t; ul.appendChild(li); });
   }
-  function drawHistory(rows) {
+  function drawHistory(rows, source) {
+    // Magnitudes when the history carries them (an alert packet), fluxes
+    // otherwise (the catalog database); a magnitude axis points up for bright.
     const card = $('historycard');
-    const pts = (rows || []).filter(r => r.mjd !== null && r.flux !== null);
+    const all = (rows || []).filter(r => r.mjd !== null && r.mjd !== undefined);
+    const useMag = all.some(r => r.mag !== null && r.mag !== undefined);
+    const val = r => useMag ? r.mag : r.flux, err = r => useMag ? r.mag_err : r.flux_err;
+    const pts = all.filter(r => val(r) !== null && val(r) !== undefined);
+    const limits = useMag ? all.filter(r => (r.mag === null || r.mag === undefined) && r.limiting_mag) : [];
     if (pts.length < 1) { card.hidden = true; return; }
     card.hidden = false;
     const c = $('lc'), ctx = c.getContext('2d'); ctx.clearRect(0, 0, c.width, c.height);
-    const xs = pts.map(p => p.mjd), ys = pts.map(p => p.flux);
+    const xs = pts.concat(limits).map(p => p.mjd), ys = pts.map(val).concat(limits.map(l => l.limiting_mag));
     const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
-    const sx = v => 30 + (x1 > x0 ? (v - x0) / (x1 - x0) : 0.5) * (c.width - 50);
-    const sy = v => c.height - 20 - (y1 > y0 ? (v - y0) / (y1 - y0) : 0.5) * (c.height - 35);
+    const span = x1 > x0 ? x1 - x0 : 1;                       // 4 % of margin so end points clear the labels
+    const sx = v => 30 + (x1 > x0 ? (v - x0 + 0.04 * span) / (1.08 * span) : 0.5) * (c.width - 50);
+    const frac = v => (y1 > y0 ? (v - y0) / (y1 - y0) : 0.5);
+    const sy = v => useMag ? 15 + frac(v) * (c.height - 35) : c.height - 20 - frac(v) * (c.height - 35);
     ctx.strokeStyle = '#262a36'; ctx.beginPath(); ctx.moveTo(30, c.height - 20); ctx.lineTo(c.width - 20, c.height - 20); ctx.stroke();
     ctx.strokeStyle = '#4c8dff'; ctx.lineWidth = 2; ctx.beginPath();
-    pts.forEach((p, i) => { const x = sx(p.mjd), y = sy(p.flux); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }); ctx.stroke();
-    ctx.fillStyle = '#4c8dff';
-    pts.forEach(p => { ctx.beginPath(); ctx.arc(sx(p.mjd), sy(p.flux), 4, 0, 6.283); ctx.fill();
-      if (p.flux_err) { ctx.strokeStyle = '#4c8dff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(sx(p.mjd), sy(p.flux - p.flux_err)); ctx.lineTo(sx(p.mjd), sy(p.flux + p.flux_err)); ctx.stroke(); } });
+    pts.forEach((p, i) => { const x = sx(p.mjd), y = sy(val(p)); if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }); ctx.stroke();
+    pts.forEach(p => { ctx.fillStyle = p.forced ? '#8b91a3' : '#4c8dff'; ctx.beginPath(); ctx.arc(sx(p.mjd), sy(val(p)), 4, 0, 6.283); ctx.fill();
+      if (err(p)) { ctx.strokeStyle = '#4c8dff'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(sx(p.mjd), sy(val(p) - err(p))); ctx.lineTo(sx(p.mjd), sy(val(p) + err(p))); ctx.stroke(); } });
+    ctx.strokeStyle = '#8b91a3'; ctx.lineWidth = 1;
+    limits.forEach(l => { const x = sx(l.mjd), y = sy(l.limiting_mag); ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + 8); ctx.moveTo(x - 3, y + 5); ctx.lineTo(x, y + 8); ctx.lineTo(x + 3, y + 5); ctx.stroke(); });
     ctx.fillStyle = '#8b91a3'; ctx.font = '11px system-ui';
     ctx.fillText('MJD ' + x0.toFixed(1), 30, c.height - 6); ctx.fillText(x1.toFixed(1), c.width - 70, c.height - 6);
-    ctx.fillText('flux', 2, 12);
-    $('historytext').textContent = pts.length + ' detection' + (pts.length === 1 ? '' : 's') + ' in the catalog database' +
-      (pts.length > 1 ? ', ' + [...new Set(pts.map(p => p.band))].join('/') + ' band' : '');
+    ctx.fillText(useMag ? 'mag' : 'flux', 2, 12);
+    $('historytext').textContent = pts.length + ' detection' + (pts.length === 1 ? '' : 's') +
+      (limits.length ? ' and ' + limits.length + ' limit' + (limits.length === 1 ? '' : 's') : '') +
+      ' from the ' + (source || 'catalog database') +
+      (pts.length > 1 ? ', ' + [...new Set(pts.map(p => p.band))].join('/') + ' band' : '') +
+      (pts.some(p => p.forced) ? '; grey points are forced photometry' : '');
   }
   function show(item) {
     current = item;
@@ -164,6 +180,8 @@ what the model said so the two can be compared later.</p>
     $('stamp').src = '/api/cutout/' + item.item_id + '.png?t=' + Date.now();
     $('subwrap').hidden = !item.has_subtracted;
     if (item.has_subtracted) $('stamp_sub').src = '/api/cutout/' + item.item_id + '.png?kind=subtracted&t=' + Date.now();
+    $('stampcap').textContent = item.stamp_label || 'image, asinh stretch';
+    $('stampsubcap').textContent = item.stamp_subtracted_label || 'background subtracted';
     const meta = {
       kind: item.kind, rank: item.rank, 'pipeline verdict': item.model_verdict.replace(/_/g, ' '),
       'model label': item.model_label, 'model confidence': item.model_confidence,
@@ -175,7 +193,7 @@ what the model said so the two can be compared later.</p>
     const dt = $('meta').firstChild; if (dt) { const dd = dt.nextSibling; dd.innerHTML = '<span class="badge ' + item.kind + '">' + item.kind + '</span>'; }
     list($('reasons'), item.reasons); list($('caveats'), item.caveats);
     fill($('evidence'), item.evidence); fill($('measurements'), item.measurements);
-    drawHistory(item.history);
+    drawHistory(item.history, item.history_source);
     $('note').value = '';
     $('counter').textContent = 'item ' + item.item_id + ' of ' + item.n_items;
     refreshProgress();

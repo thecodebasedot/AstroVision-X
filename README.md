@@ -215,7 +215,10 @@ for source in analysis.catalog:
 
 Every number below is measured against the simulator's ground truth by the
 test suite, on fields with realistic Poisson and read noise, cosmic rays and
-bad columns. They are *not* claims about real survey data.
+bad columns. They are *not* claims about real survey data. What three real
+images (a DSS plate, a Spitzer mosaic, an IRAC stamp) did to the code, and
+the numbers they gave against photutils and SEP, are in
+[docs/validation.md](docs/validation.md#real-images).
 
 | Capability | Result |
 | --- | --- |
@@ -382,7 +385,15 @@ analysis = Pipeline().run_series(series)
 
 The pipeline reads the zero point from `MAGZP`, the gain from `GAIN` and the
 saturation level from `SATURATE` when present, and falls back to configured
-values otherwise. Every assumption it had to make is listed in the report.
+values otherwise. Every assumption it had to make is listed in the report,
+and so is anything the data cannot support: a PSF under two pixels FWHM, or
+pixels with no zero point, each get a warning that says what not to trust.
+
+Catalog coordinates are ICRS. A header in another frame or projection (a
+Galactic-coordinate mosaic, a DSS plate solution, a `TPV` polynomial) is
+refitted to an ICRS tangent plane through astropy and the residual is kept in
+`image.wcs.derived_from`; without astropy such a header is read as written
+and labelled with its own axes rather than mislabelled as equatorial.
 
 Survey products come as several planes, and those are read as such:
 
@@ -409,13 +420,16 @@ fields and epochs are linked into objects with histories:
 astrovision db survey.sqlite cone 150.1 2.2 30      # everything within 30" of a position
 astrovision db survey.sqlite history 1234           # one object's detections over time
 astrovision vet field.fits --log verdicts.json      # a page where an astronomer decides
+astrovision vet alerts.avro --log verdicts.json     # the same page on an alert file, as received
 astrovision series epoch_*.fits --alerts out.avro   # transients as Avro alerts (ZTF vocabulary)
 astrovision alerts tns out.avro --reporter "Name"   # a TNS report drafted, never sent
 ```
 
 The vetting page shows one candidate at a time with its cutouts, evidence
 and history; a verdict is one keystroke and is recorded under the reviewer's
-name beside what the model said. Alerts are written and read in the
+name beside what the model said. Given an alert file instead of an image it
+shows the packets as they came -- their cutouts, light curves and scores --
+so a broker's stream can be vetted with the same keys. Alerts are written and read in the
 community's Avro formats with a standard-library codec, and a Transient Name
 Server report can be drafted from one, with a named reporter, for a person to
 submit. Every run carries a manifest

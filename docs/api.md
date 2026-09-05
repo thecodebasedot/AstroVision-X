@@ -306,6 +306,23 @@ and is appended to the active-learning `VerdictLog` with the model's own
 label and confidence beside it. From the command line:
 `astrovision vet image.fits --log verdicts.json [--db survey.sqlite] [--all-sources]`.
 
+An alert file is vetted as it is, without analysis:
+
+```python
+from astrovision.vetting import queue_for_alert_file, queue_from_alerts
+
+queue = queue_for_alert_file("ztf_public.avro", limit=50, db=db)   # ours, ZTF's or Rubin's
+queue = queue_from_alerts(packets)                                 # from AlertPacket objects
+```
+
+Each packet's science cutout is the stamp, its difference cutout the
+"subtracted" one, its previous detections, upper limits and forced
+photometry the light curve (in magnitudes, limits as arrows, forced points
+in grey), and its real-bogus score the rank; nothing is re-measured, and a
+`CatalogDB` adds this package's own detections at each position. Command
+line: `astrovision vet alerts.avro --log verdicts.json` -- the file is
+recognised by its Avro magic bytes, not its name.
+
 ## Learning from unlabelled cutouts
 
 ```python
@@ -430,6 +447,8 @@ from astrovision.io import crossmatch
 
 image = AstroImage.from_fits("field.fits")     # or .load() for npy/png/jpg
 image.describe(); image.stats(); image.cutout(x, y, 64)
+image.wcs.pixel_to_world(x, y)                 # ICRS degrees, whatever frame the header used
+image.wcs.derived_from                         # "" when read as written; else how it was refitted
 image.write("out.fits")
 
 series = ImageSeries.from_paths(sorted(paths))
@@ -526,6 +545,7 @@ packets = packets_from_analysis(analysis, series=series, verdict_log=log)   # on
 write_alerts("alerts.avro", packets)              # Avro, ZTF vocabulary, cutouts as FITS.gz
 schema, packets = read_alerts("ztf_public.avro")  # ours, real ZTF, or Rubin diaSource alerts
 packets[0].history, packets[0].cutout_science, packets[0].real_bogus
+[d for d in packets[0].history if d.forced]      # ZTF forced photometry (fp_hists), as flux points
 
 report = draft_tns_report(packets[0], reporter="A. Astronomer", reporting_group_id=..,
                           data_source_id=.., instrument_id=.., at_type="supernova")

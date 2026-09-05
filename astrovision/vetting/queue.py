@@ -55,8 +55,11 @@ class VettingItem:
     evidence: Dict[str, float] = field(default_factory=dict)
     measurements: Dict[str, Any] = field(default_factory=dict)
     history: List[Dict[str, Any]] = field(default_factory=list)
+    history_source: str = "catalog database"   # where ``history`` came from
     stamp: Optional[np.ndarray] = None
     stamp_subtracted: Optional[np.ndarray] = None
+    stamp_label: str = "image, asinh stretch"
+    stamp_subtracted_label: str = "background subtracted"
 
     @property
     def verdict_key(self) -> int:
@@ -79,6 +82,9 @@ class VettingItem:
             "evidence": {k: (None if not np.isfinite(v) else float(v))
                          for k, v in self.evidence.items()},
             "measurements": self.measurements, "history": list(self.history),
+            "history_source": self.history_source,
+            "stamp_label": self.stamp_label,
+            "stamp_subtracted_label": self.stamp_subtracted_label,
             "verdict_key": self.verdict_key,
             "has_subtracted": self.stamp_subtracted is not None,
         }
@@ -211,3 +217,136 @@ def build_queue(analysis, image, limit: int = 40, stamp_size: int = 64,
     log.info("vetting queue: %d items (%s)", len(queue),
              ", ".join(f"{k} {v}" for k, v in queue.summary()["kinds"].items()) or "empty")
     return queue
+
+
+# -- alerts as a queue -----------------------------------------------------------
+def _finite(value) -> Optional[float]:
+    return None if value is None or not np.isfinite(float(value)) else float(value)
+
+
+def _history_rows(packet) -> List[Dict[str, Any]]:
+    rows = []
+    for d in packet.history:
+        rows.append({"mjd": _finite(d.mjd), "band": d.band, "flux": _finite(d.flux),
+                     "flux_err": _finite(d.flux_err), "mag": _finite(d.mag),
+                     "mag_err": _finite(d.mag_err), "limiting_mag": _finite(d.limiting_mag),
+                     "forced": bool(d.forced), "field": packet.object_id,
+                     "separation_arcsec": None})
+    rows.append({"mjd": _finite(packet.mjd), "band": packet.band, "flux": _finite(packet.flux),
+                 "flux_err": _finite(packet.flux_err), "mag": _finite(packet.mag),
+                 "mag_err": _finite(packet.mag_err), "limiting_mag": _finite(packet.limiting_mag),
+                 "forced": False, "field": packet.object_id, "separation_arcsec": 0.0})
+    rows.sort(key=lambda r: (r["mjd"] is None, r["mjd"] or 0.0))
+    return rows
+
+
+def queue_from_alerts(packets, limit: Optional[int] = None, db=None,
+                      history_radius_arcsec: float = 2.0,
+                      field_name: str = "alerts") -> VettingQueue:
+    """Alert packets -- this package's, ZTF's or Rubin's -- as a vetting queue.
+
+    The science cutout is the stamp and the difference cutout the
+    "subtracted" one; the packet's own history (previous detections, upper
+    limits, forced photometry) is the light curve; the broker's real-bogus
+    score is the rank.  Nothing is re-measured: an alert carries what its
+    pipeline saw, and the page shows exactly that.  With ``db`` given, this
+    package's own detections within ``history_radius_arcsec`` of the alert
+    are added to the history under their field names.
+    """
+    def score_of(p) -> float:
+        for value in (p.real_bogus, p.deep_real_bogus):
+            if value is not None and np.isfinite(float(value)):
+                return float(value)
+        return 0.5
+
+    ordered = sorted(packets, key=lambda p: -score_of(p))
+    if limit is not None:
+        ordered = ordered[:int(limit)]
+    items: List[VettingItem] = []
+    for rank, p in enumerate(ordered, 1):
+        stamp = p.cutout_science
+        subtracted = p.cutout_difference
+        if stamp is None and p.cutout_template is not None:
+            stamp = p.cutout_template
+        height, width = stamp.shape if stamp is not None else (0, 0)
+        x, y = (width - 1) / 2.0, (height - 1) / 2.0
+        n_detections = sum(1 for d in p.history if d.is_detection and not d.forced)
+        n_limits = sum(1 for d in p.history if not d.is_detection and not d.forced)
+        n_forced = sum(1 for d in p.history if d.forced)
+        epoch = f"MJD {p.mjd:.3f}" if p.mjd is not None and np.isfinite(p.mjd) else "no epoch"
+        mag = (f"{p.band} {p.mag:.2f}" + (f" ± {p.mag_err:.2f}" if p.mag_err else "")
+               if p.mag is not None else f"{p.band} (no magnitude)")
+        reasons = [f"{p.publisher or p.source_format} alert {p.object_id}, candid {p.candid}",
+                   f"{mag} at {epoch}",
+                   f"{n_detections} earlier detection(s), {n_limits} upper limit(s)"
+                   + (f", {n_forced} forced-photometry point(s)" if n_forced else "")
+                   + " in the packet"]
+        if p.classification:
+            reasons.append(f"classified by its pipeline as {p.classification}")
+        if p.human_verdict:
+            reasons.append(f"a reviewer already said: {p.human_verdict}")
+        caveats = ["the score and the cutouts are the alert pipeline's own; nothing here "
+                   "was re-measured by this package"]
+        if stamp is None:
+            caveats.append("the packet carries no cutout")
+        if p.host_distance_arcsec is not None:
+            caveats.append(f"nearest reference source {p.host_distance_arcsec:.1f} arcsec away"
+                           + (f" (star score {p.host_star_score:.2f})"
+                              if p.host_star_score is not None else ""))
+        evidence = {k: v for k, v in {
+            "real_bogus": _finite(p.real_bogus), "deep_real_bogus": _finite(p.deep_real_bogus),
+            "fwhm": _finite(p.fwhm), "host_distance_arcsec": _finite(p.host_distance_arcsec),
+            "host_mag": _finite(p.host_mag), "host_star_score": _finite(p.host_star_score),
+        }.items() if v is not None}
+        measurements = {"object_id": p.object_id, "candid": p.candid, "publisher": p.publisher,
+                        "schema": p.schema_version, "mjd": _finite(p.mjd), "band": p.band,
+                        "mag": _finite(p.mag), "mag_err": _finite(p.mag_err),
+                        "flux": _finite(p.flux), "flux_err": _finite(p.flux_err),
+                        "limiting_mag": _finite(p.limiting_mag), "is_positive": p.is_positive,
+                        "classification": p.classification}
+        item = VettingItem(
+            item_id=len(items) + 1, kind="transient", source_id=None,
+            candidate_id=int(p.candid), rank=rank, score=score_of(p),
+            model_verdict=str(p.verdict or "unranked"),
+            model_label=str(p.classification or "transient"),
+            model_confidence=score_of(p), x=x, y=y,
+            ra=_finite(p.ra), dec=_finite(p.dec), reasons=reasons, caveats=caveats,
+            evidence=evidence, measurements=measurements, history=_history_rows(p),
+            history_source="alert packet", stamp=stamp, stamp_subtracted=subtracted,
+            stamp_label=("science cutout from the alert" if p.cutout_science is not None
+                         else "template cutout from the alert"),
+            stamp_subtracted_label="difference cutout from the alert")
+        if db is not None and item.ra is not None and item.dec is not None:
+            try:
+                for r in db.cone_search(item.ra, item.dec, history_radius_arcsec):
+                    item.history.append({"mjd": r.get("mjd"), "band": r.get("band"),
+                                         "flux": r.get("flux"), "flux_err": r.get("flux_err"),
+                                         "mag": r.get("mag"), "mag_err": None,
+                                         "limiting_mag": None, "forced": False,
+                                         "field": r.get("field_name"),
+                                         "separation_arcsec": r.get("separation_arcsec")})
+                item.history_source = "alert packet and catalog database"
+            except Exception as error:                     # pragma: no cover
+                log.warning("history lookup failed: %s", error)
+        items.append(item)
+    queue = VettingQueue(items, field_name=field_name, image_shape=None)
+    log.info("vetting queue from %d alert(s): %d items", len(list(packets)), len(queue))
+    return queue
+
+
+def is_alert_file(path: str) -> bool:
+    """True for an Avro object container (by its magic bytes, not its name)."""
+    try:
+        with open(path, "rb") as handle:
+            return handle.read(4) == b"Obj\x01"
+    except OSError:
+        return False
+
+
+def queue_for_alert_file(path: str, limit: Optional[int] = None, db=None) -> VettingQueue:
+    """Read an alert file and queue its packets; see :func:`queue_from_alerts`."""
+    from ..alerts import read_alerts
+
+    _, packets = read_alerts(path)
+    import os
+    return queue_from_alerts(packets, limit=limit, db=db, field_name=os.path.basename(path))

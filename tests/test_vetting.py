@@ -207,3 +207,93 @@ class TestHttp:
             session.record(item.item_id, "real", "ana")
         status, _, body = self._get(srv.url + "api/next?reviewer=ana")
         assert json.loads(body) == {}
+
+
+class TestAlertsAsAQueue:
+    """An alert file is vetted as it is: its cutouts, its history, its score."""
+
+    @staticmethod
+    def _packets():
+        from astrovision.alerts import AlertPacket, Detection
+        rng = np.random.default_rng(1)
+
+        def stamp(peak):
+            arr = rng.normal(size=(31, 31))
+            arr[15, 15] += peak
+            return arr
+
+        strong = AlertPacket(object_id="ZTF18aaaaaaa", candid=472263571115095000, ra=150.1,
+                             dec=2.2, mjd=58200.0, band="r", mag=18.5, mag_err=0.05,
+                             limiting_mag=20.3, real_bogus=0.9, deep_real_bogus=0.95,
+                             fwhm=2.1, host_distance_arcsec=0.4, host_star_score=0.2,
+                             publisher="ZTF", schema_version="4.02", source_format="ztf",
+                             history=[Detection(mjd=58198.0, band="g", mag=18.9, mag_err=0.1),
+                                      Detection(mjd=58190.0, band="r", limiting_mag=20.5),
+                                      Detection(mjd=58150.0, band="r", flux=120.0, flux_err=15.0,
+                                                mag=20.9, mag_err=0.13, forced=True)],
+                             cutout_science=stamp(40.0), cutout_template=stamp(5.0),
+                             cutout_difference=stamp(35.0))
+        weak = AlertPacket(object_id="ZTF18bbbbbbb", candid=472263571115095001, ra=150.2,
+                           dec=2.3, mjd=58200.1, band="g", mag=19.9, mag_err=0.2,
+                           real_bogus=0.3, publisher="ZTF", source_format="ztf")
+        return [weak, strong]
+
+    def test_packets_become_items_ranked_by_their_score(self):
+        from astrovision.vetting import queue_from_alerts
+        queue = queue_from_alerts(self._packets())
+        assert len(queue) == 2
+        first, second = queue.items
+        assert first.candidate_id == 472263571115095000 and first.score == pytest.approx(0.9)
+        assert second.score == pytest.approx(0.3) and second.rank == 2
+        assert first.kind == "transient" and first.source_id is None
+        assert first.verdict_key == -472263571115095000       # a verdict has an id to land on
+        assert first.stamp.shape == (31, 31) and first.stamp_subtracted is not None
+        assert first.x == 15.0 and first.y == 15.0
+        assert first.ra == 150.1 and first.evidence["deep_real_bogus"] == pytest.approx(0.95)
+        assert first.history_source == "alert packet"
+        assert len(first.history) == 4                          # three epochs plus the alert
+        assert [h["mjd"] for h in first.history] == [58150.0, 58190.0, 58198.0, 58200.0]
+        assert first.history[0]["forced"] and first.history[1]["limiting_mag"] == 20.5
+        assert any("forced-photometry" in r for r in first.reasons)
+        assert any("nothing here was re-measured" in c for c in first.caveats)
+        assert second.stamp is None and any("no cutout" in c for c in second.caveats)
+        payload = first.to_dict()
+        assert payload["has_subtracted"] and payload["history_source"] == "alert packet"
+
+    def test_a_database_adds_this_packages_detections(self, tmp_path):
+        from astrovision.catalog import CatalogDB
+        from astrovision.core.types import BoundingBox, Source, SourceCatalog
+        from astrovision.vetting import queue_from_alerts
+        db = CatalogDB(str(tmp_path / "cat.sqlite"))
+        source = Source(id=1, x=5.0, y=5.0, bbox=BoundingBox(0, 0, 1, 1), ra=150.1, dec=2.2)
+        source.photometry.flux, source.photometry.magnitude = 1000.0, 17.5
+        db.ingest(SourceCatalog([source]), name="our field", band="r", mjd=58100.0)
+        queue = queue_from_alerts(self._packets(), db=db)
+        first = queue.items[0]
+        assert first.history_source == "alert packet and catalog database"
+        ours = [h for h in first.history if h["field"] == "our field"]
+        assert len(ours) == 1 and ours[0]["mjd"] == 58100.0
+
+    def test_an_alert_file_is_recognised_and_served(self, tmp_path):
+        from astrovision.alerts import write_alerts
+        from astrovision.vetting import (VettingSession, VettingServer, is_alert_file,
+                                         queue_for_alert_file)
+        path = str(tmp_path / "alerts.avro")
+        write_alerts(path, self._packets())
+        assert is_alert_file(path) and not is_alert_file(__file__)
+        queue = queue_for_alert_file(path, limit=1)
+        assert len(queue) == 1 and queue.field_name == "alerts.avro"
+        session = VettingSession(queue, log_path=str(tmp_path / "verdicts.json"))
+        server = VettingServer(session, port=0).start()
+        try:
+            import json
+            from urllib.request import urlopen
+            item = json.loads(urlopen(server.url + "/api/item/1").read())
+            assert item["kind"] == "transient" and item["has_subtracted"]
+            assert item["history_source"] == "alert packet"
+            png = urlopen(server.url + "/api/cutout/1.png?kind=subtracted").read()
+            assert png[:8] == b"\x89PNG\r\n\x1a\n"
+        finally:
+            server.stop()
+        verdict = session.record(1, "real", reviewer="A. Astronomer")
+        assert verdict.kind == "transient" and verdict.candidate_id == 472263571115095000

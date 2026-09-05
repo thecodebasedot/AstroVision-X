@@ -1051,11 +1051,11 @@ the usual expectation that head-only tuning saturates:
 A few hundred examples cannot retrain a network without destroying the
 features the source domain paid for.
 
-**Not measured here:** any of this against real survey data. Nothing outside
-the package registries was reachable from this environment, so the loaders are
-exercised against files written in the same formats and the domain shift is
-between two simulated instruments. The method and the shape of the answer are
-real; a number for any particular survey is not.
+**Not measured here:** any of this against labelled real survey data. Real
+images have since been run through the loaders and the pipeline (see [Real
+images](#real-images)), but no labels came with them, so the domain shift
+is still measured between two simulated instruments. The method and the
+shape of the answer are real; a number for any particular survey is not.
 
 Tests: `tests/test_transfer.py`.
 
@@ -1081,10 +1081,12 @@ reader silently dropped the rotation of every `PC`-form header, and the
 preprocessor overwrote the survey's noise plane with its own estimate so the
 photometer never saw it.
 
-**Not measured:** any archive file. Nothing outside the package registries was
-reachable, so the layouts are those of files written here.
+Archive files were reached later in the work, and what they did to this
+loader is in [Real images](#real-images) below: a plate solution lost to a
+comment card, a Galactic-frame WCS reported as if it were equatorial, a
+pre-2000 date, a channel number in place of a filter name.
 
-Tests: `tests/test_survey.py`.
+Tests: `tests/test_survey.py`, `tests/test_real_data.py`.
 
 ## Agreement with photutils and SEP
 
@@ -1292,6 +1294,118 @@ position through CSV to a milliarcsecond.
 
 Tests: `tests/test_healpix.py`, `tests/test_catalog_db.py`.
 
+## Real images
+
+Everything above is measured against the simulator. This section is what
+happened when real files went through the same code. Three public images
+were reachable from the environment (the `astropy/photutils-datasets`
+mirror, fetched by URL; nothing from a survey archive was):
+
+| File | What it is | Pixels | Header |
+| --- | --- | --- | --- |
+| `M6707HH.fits` | Digitized Sky Survey scan of a Palomar 48-inch plate of the open cluster M67, 1951 | 1059 × 1059 | plate solution (`PLTRAH`, `AMDX`), `DATE-OBS = '29/11/51'`, a multi-line comment stored as a value, no filter name |
+| `spitzer_example_image.fits` | Spitzer IRAC channel 2 (4.5 µm) mosaic of a Galactic-plane field, 2006 | 1025 × 513 | `GLON-CAR`/`GLAT-CAR` axes, `BUNIT = MJy/sr`, `GAIN = 3.7`, `CHNLNUM = 2`, no filter name, no zero point |
+| `irac_ch1_flight.fits` | IRAC channel 1 in-flight PSF stamp | 81 × 81 | 35 cards, no WCS, no date |
+
+**What broke, and the fixes.** Every one of these is now a test in
+`tests/test_real_data.py`.
+
+- *The plate solution was lost.* The DSS header carries a two-line string
+  as a card value. Astropy refuses the whole header for it, the loader's
+  astropy path raised, and the fallback parser -- which knows nothing of
+  plate solutions -- reported "no WCS". The header is now cut to printable
+  ASCII before astropy sees it, which recovers wcslib's translation of the
+  plate solution: 1.700 arcsec/px, not the 1.0 that was assumed, and the
+  frame centre lands on the cluster's catalogued position.
+- *Galactic coordinates were written into the `ra`/`dec` columns.* The
+  Spitzer mosaic's axes are Galactic longitude and latitude in a Cartesian
+  projection. The tangent-plane parser read the numbers as if they were
+  right ascension and declination, so every position in the catalog and
+  the database was in the wrong frame. Any WCS astropy understands that is
+  not a plain equatorial TAN -- another frame, another projection, a plate
+  solution, a `TPV` polynomial -- is now *refitted*: a 9 × 9 grid of pixels
+  is sent through astropy's transform to ICRS and a TAN projection fitted
+  to it, with SIP terms when the linear fit leaves more than 0.01 px. The
+  fit is then checked through this package's own transform, and the residual
+  is recorded in `wcs.derived_from`. On the Spitzer mosaic the residual is
+  0.003 px; on the DSS plate, with cubic SIP terms, 0.0001 px forward and
+  inverse over a 31 × 31 grid (against astropy). One consequence for
+  everyone: with astropy installed, a header's own SIP terms used to be
+  dropped on the way through; they are kept now.
+- *`DATE-OBS = '29/11/51'`* is the pre-2000 FITS form and gave no epoch; it
+  is read as 1951 November 29 (MJD 33979).
+- *`CHNLNUM = 2`* with `INSTRUME = 'IRAC'` and no filter keyword gave band
+  "clear"; it gives "IRAC2".
+- *A 1.7-pixel PSF.* At 1.2 arcsec/px the IRAC image is undersampled, and
+  the pipeline classified 3280 of 4040 sources in a Galactic-plane star
+  field as galaxies (1655 of them "mergers") and flagged 268 lens
+  candidates. Nothing in that report was wrong by its own definitions --
+  at that sampling a blended pair *is* extended -- and everything in it was
+  useless. The pipeline now warns, in the report's warning list, when the
+  PSF FWHM is under two pixels that star/galaxy separation, morphology and
+  the lens search cannot tell resolved from unresolved, and it warns when
+  a survey file has no zero point that the magnitudes are instrumental
+  (the IRAC pixels are in MJy/sr and were reported as magnitudes 20 to 16).
+- *Time.* The M67 plate took 302 s end to end and the Spitzer mosaic
+  1188 s -- for half a megapixel. The Sérsic fit convolved its model with
+  the PSF by direct correlation on every one of some 150 evaluations per
+  source; it now renders the model on a grid one kernel half-width wider
+  than the cutout and convolves by FFT with the kernel's transform computed
+  once per fit, which is the exact linear convolution with no edge
+  assumption (a test checks it against the direct sum to 1e-12) and takes
+  the morphology stage from 33 s to 21 s per 300 sources. The rest of the
+  time is the lens search examining every "galaxy" (634 s on the IRAC
+  field) and the anomaly stage (98 s); the warning above is the honest
+  answer to the first, not a faster search.
+
+**What was measured on the plate.** M67 through preprocessing, detection
+and photometry: 2772 sources in 55 s, PSF FWHM 4.9 px from 60 stars.
+
+| Check | Result |
+| --- | --- |
+| photutils at the same nominal 3.5 σ | 1086 sources; 84 % of them matched to ours within 2 px, positions agree to 0.26 px, flux ratio 0.989 ± 0.042 |
+| SEP at the same threshold | 1012 sources; 88 % matched, 0.24 px, flux ratio 0.981 ± 0.036 |
+| Our detections the other two do not have | 1827; median S/N 5.7, 81 % below S/N 10, 39 % below 5: the plate's grain, which is not Gaussian noise, at the threshold |
+| Their detections we do not have | 180 (photutils), 130 (SEP) |
+| Tiled (512 px, 64 overlap, 9 tiles) against whole frame | 2560 of 2772 matched within 1 px, median offset 0.03 px; flux ratio 0.93, uniform across the field |
+| Catalog database | 2772 detections ingested with ICRS positions in 0.18 s; a 2-arcminute cone at the cluster centre returns 36 rows in 20 ms |
+| Frame centre from the refitted plate solution | RA 132.834, Dec +11.812; M67's catalogued centre is RA 132.83, Dec +11.81 |
+
+The 7 % tiled offset is not the tiler. The plate's PSF depends on stellar
+brightness -- emulsion is not linear -- so the PSF model built from the
+whole frame's 60 brightest stars has FWHM 4.9 px and r90 6.3 px, while the
+nine tiles' own models range from 3.3 to 4.6 px and 4.1 to 6.3 px, and the
+aperture correction follows r90. On the simulator, whose PSF is one Moffat
+for every star, the same comparison agrees to 1 %; on a plate the
+aperture correction itself is uncertain at the level the tiles disagree.
+That is now in the list of what is not validated.
+
+**The full pipeline on each image.** Stage times in seconds:
+
+| Stage | M67 plate (2772 sources) | IRAC mosaic (4040 sources) |
+| --- | --- | --- |
+| preprocess | 7.4 | 3.6 |
+| detect | 11.9 | 9.8 |
+| photometry | 33.1 | 52.2 |
+| segmentation | 2.8 | 2.5 |
+| morphology | 80.8 (597 fitted) | 340.9 (3188 fitted) |
+| embeddings | 8.0 | 8.4 |
+| anomaly | 68.5 | 97.8 |
+| lensing | 50.7 (170 examined, 28 flagged) | 634.1 (2027 examined, 268 flagged) |
+| clustering | -- | 28.2 |
+| total | 302 | 1188 |
+
+Both reports rank 20 anomalies with the caveat the report always carries
+("an outlier score measures dissimilarity from this field, not physical
+novelty"); on the plate the top ones are blended pairs and edge sources,
+which is what an outlier score finds in an open cluster. The 81 × 81 IRAC
+stamp has no PSF stars (it *is* one), falls back to a 3-pixel Gaussian
+with a warning, yields 5 sources, a five-item vetting queue with stamps,
+and a database ingest that says it stored detections without sky
+positions because there is no WCS. Every number in this section is from
+a single run on one machine; none is a claim about the surveys, only
+about what this code does with their files.
+
 ## The vetting page
 
 Tested through its HTTP API with a real analysis behind it: the page and
@@ -1306,6 +1420,19 @@ loads. The PNG encoder is checked chunk by chunk (signature, IHDR size,
 inflated IDAT length) and the asinh stretch is checked to show a 6-sigma
 source and a 5000-count star on the same stamp. The page was driven in
 Chromium for the screenshots in this session.
+
+**Alert files.** Two packets, one with cutouts and a three-epoch history
+(a detection, an upper limit, a forced-photometry point) and one with
+neither, become a queue ranked by real-bogus score; the first item carries
+the science stamp, the difference stamp as the "subtracted" one, the four
+epochs in time order with the limit and the forced point marked, the
+broker's scores as evidence, and a verdict key derived from the candidate
+id so a verdict has an id to land on; the second says it has no cutout.
+With a catalog database, this package's own detection within 2 arcsec is
+appended under its field name. A file written by `write_alerts` is
+recognised by its magic bytes, queued through the file API, served over
+HTTP with a PNG of the difference stamp, and a verdict recorded on it
+carries the kind and the candidate id.
 
 Tests: `tests/test_vetting.py`.
 
@@ -1334,7 +1461,26 @@ reviewer's verdict when the active-learning log has one.
 has to fill in, is refused without a reporter, and the module imports no
 HTTP client (a test asserts that from its source).
 
-Tests: `tests/test_alerts.py`.
+**Against the real schemas.** ZTF's schema files (`alert.avsc` 4.02 and
+the `candidate`, `prv_candidate`, `fp_hist` and `cutout` records it names)
+and Rubin's sample `alert.json` for schema 7.4 were fetched from their
+public repositories. An alert written by fastavro in ZTF's own nested
+schema -- 103 candidate fields, two previous candidates one of which is an
+upper limit, one forced-photometry epoch, three gzip-FITS cutouts -- is
+decoded by this package's reader field-for-field and byte-for-byte equal
+to fastavro's own reading, and the packet built from it carries the
+magnitude, both real-bogus scores, the host distance, the limit, the
+three stamps and a TNS draft. Two things that did not work the first time
+are now tests: the forced-photometry array (`fp_hists`, new in 4.x) was
+dropped, and now joins the history as flux points marked ``forced`` with
+a magnitude where the epoch's zero point allows one; and a cutout whose
+bytes are not a FITS file raised out of the reader instead of being
+reported as no stamp. Rubin's sample reads as a packet with two
+previous sources at AB 23.67. ZTF's example binary packets are not at
+the paths its notebooks name, so no archive packet was read as bytes;
+the schema files are the real ones.
+
+Tests: `tests/test_alerts.py`, `tests/test_real_data.py`.
 
 ## Reproducibility
 
@@ -1439,8 +1585,13 @@ Tests: `tests/test_fallbacks.py`; the matrix is `.github/workflows/ci.yml`.
 - Any absolute photometric calibration against a standard system.
 - Whether the morphological classifier agrees with human classifiers on real
   galaxies, which is the only test that would matter for that stage.
-- Any model against real survey images or crowd-sourced labels. The loaders
-  for those formats exist and are tested against files, and the cost of an
-  instrument change is measured between two simulated instruments — but no
-  external data was reachable from the environment this was built in, so the
-  transfer numbers are about the method, not about SDSS or ZTF.
+- Any model against crowd-sourced or catalogue labels on real images. Three
+  real images have been through the pipeline ([Real images](#real-images)),
+  which is what found the WCS, date and sampling problems listed there; none
+  came with labels, so the classifiers and the transfer numbers are still
+  scored on the simulator, and the transfer numbers are about the method,
+  not about SDSS or ZTF.
+- The tiled photometry on a photographic plate: it differs from the whole
+  frame by 7 % because the plate's PSF depends on stellar brightness and the
+  aperture correction assumes it does not. On CCD-like data the two agree to
+  1 %; on plates the correction itself is uncertain at that level.
