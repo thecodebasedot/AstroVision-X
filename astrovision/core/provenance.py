@@ -96,6 +96,9 @@ def file_checksum(path: str, algorithm: str = "sha256",
 def config_hash(config: Any) -> str:
     """A content hash of a configuration, stable across key order."""
     payload = config.to_dict() if hasattr(config, "to_dict") else config
+    if isinstance(payload, dict):
+        # How many processes did the work is not part of what the result is.
+        payload = {k: v for k, v in payload.items() if k != "n_workers"}
     text = json.dumps(payload, sort_keys=True, default=str, separators=(",", ":"))
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
 

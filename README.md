@@ -380,6 +380,12 @@ Presets: `deep_field`, `wide_survey`, `transient_search`, `lens_search`,
 `quicklook`. The full configuration is written into every report, so a result
 can always be reproduced.
 
+`--set n_workers=0` runs the per-source stages (morphology, the lens search)
+on every core but one; `N` uses N processes; the default `1` stays in one
+process. The result is the same to the last digit either way (a test checks
+it), so the worker count is left out of the reproducibility hash. The
+desktop application defaults to all cores but one.
+
 ```python
 from astrovision import AstroVisionConfig, Pipeline
 

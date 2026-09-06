@@ -14,6 +14,7 @@ from ..preprocess.varying_psf import psf_at
 from .aperture import (circular_aperture_weights, elliptical_photometry, multi_aperture,
                        stamp_box)
 from .growth import auto_aperture, concentration_index, curve_of_growth, flux_radius
+from .growthcurve import build_growth_curve
 from .magnitudes import flux_to_magnitude, limiting_magnitude, surface_brightness
 
 log = get_logger("photometry.photometer")
@@ -83,7 +84,36 @@ class Photometer:
 
         radii = sorted(set(list(cfg.aperture_radii) + [cfg.primary_aperture]))
         psf_model = image.meta.get("psf_model")
-        apply_correction = psf_model is not None
+        mode = str(cfg.aperture_correction or "auto").lower()
+        growth_curve = None
+        if mode in ("auto", "stars"):
+            psf_fwhm = float(psf_model.fwhm) if psf_model is not None else 0.0
+            growth_curve = build_growth_curve(data, catalog, psf_fwhm,
+                                              min_stars=int(cfg.growth_curve_min_stars))
+            if growth_curve is not None:
+                image.meta["growth_curve"] = growth_curve
+        # Which correction is applied.  The PSF stamp is a sub-pixel
+        # registered stack of the field's stars and, measured against the
+        # simulator's truth, is the more accurate of the two by about a
+        # percent; the field-star curve reaches further into the wings and
+        # carries an uncertainty -- the spread between stars -- so in "auto"
+        # it is the check on the stamp, and the correction only when there
+        # is no stamp.  A plate whose bright and faint stars have different
+        # profiles shows up as a large spread, and the report says so.
+        if mode == "none":
+            use_curve, apply_correction = False, False
+        elif mode == "stars":
+            use_curve = growth_curve is not None
+            apply_correction = use_curve
+        else:
+            use_curve = growth_curve is not None and psf_model is None
+            apply_correction = use_curve or psf_model is not None
+        correction_source = ("field_stars" if use_curve
+                             else "psf_model" if apply_correction else "none")
+        if not use_curve:
+            growth_curve_check, growth_curve = growth_curve, None
+        else:
+            growth_curve_check = growth_curve
         auto_max_radius = max(12.0, cfg.annulus_outer)
         for source in catalog:
             # The curve of growth must reach past r80 or the concentration
@@ -156,13 +186,19 @@ class Photometer:
 
             correction = 1.0
             if apply_correction and np.isfinite(source.photometry.aperture_radius):
-                # The *local* PSF where the field has a spatial model: an
-                # aperture correction derived from a field-average PSF is
-                # wrong by the amount the PSF varies, and it is wrong in
-                # opposite directions at the centre and the corners.
-                local = psf_at(image.meta, source.x, source.y) or psf_model
-                correction = self.aperture_correction(
-                    local, source.photometry.aperture_radius)
+                if growth_curve is not None:
+                    # The field's own stars, measured out past every aperture.
+                    correction = growth_curve.correction(source.photometry.aperture_radius)
+                    source.meta["aperture_correction_err"] = growth_curve.uncertainty(
+                        source.photometry.aperture_radius)
+                else:
+                    # The *local* PSF where the field has a spatial model: an
+                    # aperture correction derived from a field-average PSF is
+                    # wrong by the amount the PSF varies, and it is wrong in
+                    # opposite directions at the centre and the corners.
+                    local = psf_at(image.meta, source.x, source.y) or psf_model
+                    correction = self.aperture_correction(
+                        local, source.photometry.aperture_radius)
                 source.meta["aperture_correction"] = correction
 
             source.photometry.flux = float(measurement.flux * correction)
@@ -193,7 +229,20 @@ class Photometer:
                 median_rms, cfg.primary_aperture, zero_point, 5.0),
             "n_measured": len(catalog),
             "aperture_corrected": bool(apply_correction),
+            "aperture_correction_source": correction_source,
         }
+        if growth_curve_check is not None:
+            curve = growth_curve_check
+            stamp_correction = (self.aperture_correction(psf_model, cfg.primary_aperture)
+                                if psf_model is not None else float("nan"))
+            self.report["growth_curve"] = {
+                "n_stars": curve.n_stars, "far_radius": curve.far_radius,
+                "correction_at_primary": curve.correction(cfg.primary_aperture),
+                "uncertainty_at_primary": curve.uncertainty(cfg.primary_aperture),
+                "psf_stamp_correction_at_primary": stamp_correction,
+                "missing_beyond_far_radius": curve.missing_beyond,
+                "applied": bool(use_curve),
+            }
         catalog.meta["photometry"] = dict(self.report)
         log.info("photometry on %d sources: zp=%.2f, 5-sigma limit=%.2f mag",
                  len(catalog), zero_point, self.report["limiting_magnitude_5sigma"])

@@ -17,6 +17,8 @@ astrovision.describe_capabilities()                # which backends are present
 from astrovision import Pipeline, AstroVisionConfig
 
 config = AstroVisionConfig().with_preset("deep_field")
+config.n_workers = 0                     # per-source stages on all cores but one; 1 = this process
+config.photometry.aperture_correction = "auto"   # PSF stamp, checked against the field's stars; "stars" | "psf" | "none"
 config.detection.threshold_sigma = 2.5
 
 pipeline = Pipeline(config)

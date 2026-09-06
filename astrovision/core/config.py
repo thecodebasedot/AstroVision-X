@@ -186,6 +186,13 @@ class PhotometryConfig(_Section):
     local_background: bool = True
     annulus_inner: float = 8.0
     annulus_outer: float = 14.0
+    #: Where the aperture correction comes from: "stars" measures the
+    #: enclosed-flux curve of the field's bright isolated stars, "psf" uses
+    #: the PSF model's stamp, "auto" uses the stars when at least
+    #: ``growth_curve_min_stars`` qualify and the stamp otherwise, "none"
+    #: applies no correction.
+    aperture_correction: str = "auto"
+    growth_curve_min_stars: int = 5
 
 
 @dataclass
@@ -347,6 +354,11 @@ class LensingConfig(_Section):
     ring_bins: int = 72
     score_threshold: float = 0.5
     search_radius_factor: float = 4.0
+    #: A deflector must be resolved: its half-light radius at least this many
+    #: times the PSF's own, or arcs cannot be told from its light.  Set 0
+    #: to examine everything, as the search did before it met an
+    #: undersampled star field and spent ten minutes on 2000 stars.
+    min_deflector_size: float = 1.5
     #: Fit a mass model to the arcs of every candidate that has enough of them.
     fit_model: bool = True
     fit_shear: bool = True
@@ -428,6 +440,11 @@ class AstroVisionConfig(_Section):
     name: str = "astrovision-run"
     random_state: int = 42
     log_level: str = "info"
+    #: Worker processes for the per-source stages (morphology, lens search):
+    #: 1 runs everything in this process, 0 uses all cores but one, N uses N.
+    #: The result does not depend on it, so it is left out of the
+    #: configuration hash a run is reproduced from.
+    n_workers: int = 1
     preprocess: PreprocessConfig = field(default_factory=PreprocessConfig)
     detection: DetectionConfig = field(default_factory=DetectionConfig)
     segmentation: SegmentationConfig = field(default_factory=SegmentationConfig)

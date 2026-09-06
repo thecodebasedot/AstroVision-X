@@ -1088,6 +1088,64 @@ pre-2000 date, a channel number in place of a filter name.
 
 Tests: `tests/test_survey.py`, `tests/test_real_data.py`.
 
+## Aperture correction from the field's stars
+
+The aperture correction -- the light an aperture misses in the PSF's
+wings -- came from the PSF model's stamp: a 25-pixel, sub-pixel-registered
+stack of the field's stars. On a photographic plate that stamp depends on
+which stars went into it, which is why tiled and whole-frame photometry
+of M67 differed by 7 %. `photometry.growthcurve` now measures the
+enclosed-flux curve directly on the field's bright, unsaturated,
+point-like stars with no neighbour above a twentieth of their flux
+within the curve's reach, out to five FWHM, each with its own sky from an
+annulus beyond that, the outer wings extrapolated from the curve's
+power-law slope, the median taken over the twelve brightest. The curve
+answers `correction(radius)` and `uncertainty(radius)`, the latter the
+spread between stars.
+
+**Which one is applied.** Against the simulator's injected fluxes, for
+stars above signal-to-noise 20 in their adaptive apertures (mostly 4 to 6
+pixels), three fields:
+
+| Correction | flux / true, median |
+| --- | --- |
+| none | 0.944 |
+| PSF stamp | 0.995, 1.002, 0.990 |
+| field stars | 0.991, 0.979, 0.981 |
+
+The stamp is the more accurate by about a percent: the field-star curve
+is normalised by each star's flux at the far radius, where even a bright
+star's wings are near the noise, and the median of a dozen such
+normalisations sits high by the amount the noise took (restricting the
+curve to the brightest twelve stars, rather than all sixty that
+qualified, halved that bias; it did not remove it). So in the default
+`aperture_correction="auto"` the stamp is applied and the field-star
+curve is the *check* on it; `"stars"` applies the curve, which is the
+right choice when the stamp is not to be trusted, `"psf"` never builds
+the curve, `"none"` corrects nothing. The check is recorded in the
+photometry report (both corrections at the primary aperture, the spread,
+the wing fraction beyond the far radius) and the pipeline warns when the
+stars' spread exceeds 5 %, or when the two corrections differ by more
+than 3 % and twice the spread.
+
+**On the real images.** On the M67 plate the field's ten qualifying
+stars give 1.39 ± 0.14 at the 5-pixel aperture against the stamp's 1.18,
+and the report now carries the warning that fluxes on this frame are
+uncertain at 14 % because the stars' profiles differ -- which is what a
+photographic plate does and what the tiled comparison had found the hard
+way. On the IRAC mosaic no star qualifies (every one has a neighbour
+above a twentieth of its flux within 20 pixels), so the check is silent
+there and the report says nothing about it, which is the honest
+alternative to a curve from blended stars. The first version of the
+selection required *no* detection within the reach, and found no star at
+all on the plate: its 2772 detections, most of them grain, put one within
+13 pixels of any star.
+
+Tests: `tests/test_growthcurve.py` -- the selection rules on a hand-built
+catalog, the wing extrapolation on a synthetic power-law deficit, the
+curve against the stamp (2 %) and against injected fluxes (2 %) on a
+simulated field, the three modes in the photometer, the warning.
+
 ## Agreement with photutils and SEP
 
 Three 512² fields (160 stars, 30 galaxies, no cosmic rays or bad columns so
@@ -1336,16 +1394,26 @@ mirror, fetched by URL; nothing from a survey archive was):
   is read as 1951 November 29 (MJD 33979).
 - *`CHNLNUM = 2`* with `INSTRUME = 'IRAC'` and no filter keyword gave band
   "clear"; it gives "IRAC2".
-- *A 1.7-pixel PSF.* At 1.2 arcsec/px the IRAC image is undersampled, and
-  the pipeline classified 3280 of 4040 sources in a Galactic-plane star
-  field as galaxies (1655 of them "mergers") and flagged 268 lens
-  candidates. Nothing in that report was wrong by its own definitions --
-  at that sampling a blended pair *is* extended -- and everything in it was
-  useless. The pipeline now warns, in the report's warning list, when the
-  PSF FWHM is under two pixels that star/galaxy separation, morphology and
-  the lens search cannot tell resolved from unresolved, and it warns when
-  a survey file has no zero point that the magnitudes are instrumental
-  (the IRAC pixels are in MJy/sr and were reported as magnitudes 20 to 16).
+- *A 1.7-pixel PSF with wings.* At 1.2 arcsec/px the IRAC image is
+  undersampled, and the pipeline classified 3280 of 4040 sources in a
+  Galactic-plane star field as galaxies (1655 of them "mergers") and
+  flagged 268 lens candidates. The cause was not the sampling alone: the
+  star/galaxy votes compared each source's half-light radius with *half
+  the PSF FWHM*, a Gaussian's value, and the IRAC PSF's stamp has a
+  half-light radius of 2.05 px against a 0.86 px Gaussian estimate, so
+  every star measured as resolved. The references are now measured on the
+  PSF stamp with the sources' own estimators (`point_source_reference`).
+  On the simulator the star/galaxy split is unchanged within noise (stars
+  97.7 → 98.6 % correct, galaxies 95.8 → 94.4 %, four fields, S/N > 10);
+  on the IRAC field the classes go from 865 stars and 3139 galaxies to
+  3359 stars and 655 galaxies, the morphology stage from 341 s to 12 s,
+  and the lens search -- which now also skips anything smaller than 1.5
+  point sources -- from 634 s over 2027 "deflectors" to 2 s over 542,
+  still with 113 candidates: blended pairs in a crowded field are what an
+  arc finder finds, and the report's undersampling warning now says so.
+  The pipeline also warns when a survey file has no zero point that the
+  magnitudes are instrumental (the IRAC pixels are in MJy/sr and were
+  reported as magnitudes 20 to 16).
 - *Time.* The M67 plate took 302 s end to end and the Spitzer mosaic
   1188 s -- for half a megapixel. The Sérsic fit convolved its model with
   the PSF by direct correlation on every one of some 150 evaluations per
@@ -1378,7 +1446,10 @@ nine tiles' own models range from 3.3 to 4.6 px and 4.1 to 6.3 px, and the
 aperture correction follows r90. On the simulator, whose PSF is one Moffat
 for every star, the same comparison agrees to 1 %; on a plate the
 aperture correction itself is uncertain at the level the tiles disagree.
-That is now in the list of what is not validated.
+The photometer now measures that uncertainty from the field's own stars
+and the report says it (see [Aperture correction from the field's
+stars](#aperture-correction-from-the-fields-stars)): on this plate the
+ten bright isolated stars disagree on the correction by 14 %.
 
 **The full pipeline on each image.** Stage times in seconds:
 
@@ -1481,6 +1552,42 @@ the paths its notebooks name, so no archive packet was read as bytes;
 the schema files are the real ones.
 
 Tests: `tests/test_alerts.py`, `tests/test_real_data.py`.
+
+## Parallel stages
+
+The morphology and lens stages do the same work on every source, so each
+was split into a preparation step (cutout, footprint, sky), a module-level
+per-source function, and a write-back step; the function runs in this
+process or in a pool of spawned workers, through one call
+(`core.parallel.map_work`). Because it is the same function either way,
+the parallel run is the serial run: on a 640-pixel field with 211
+sources, every morphology statistic, Sérsic fit, flag and score, and the
+lens candidate list, are identical between one process and three (a test
+repeats the check on a smaller field). The worker count is left out of the
+configuration hash for that reason.
+
+| Stage, 211 sources, 4 cores (3 workers) | one process | three | speedup |
+| --- | --- | --- | --- |
+| morphology | 7.1 s | 3.2 s | 2.2× |
+| lens search | 4.6 s | 4.7 s | none -- see below |
+
+The lens stage's time on this field is the mass-model fits of its six
+candidates (4.4 of 4.6 s), which run in the main process; the arc search
+itself goes from 0.40 s to 0.23 s. On the IRAC field, where the search
+examined 2027 sources for 634 s, the search is what dominates and what is
+now parallel; the fits were not made parallel because a field has few
+candidates.
+
+The pool is started with the "spawn" method everywhere -- the only one
+that is safe from a process with threads, and the only one Windows has --
+and its first act is a ping with a two-minute deadline: a worker that
+cannot re-import the main module (a script fed on standard input, some
+notebooks) dies on start, and without the ping `Pool.map` would wait
+forever while replacements were spawned and died in turn. A pool that
+fails the ping is given up on for the process and the stage runs serially
+with a warning; a test forces that path.
+
+Tests: `tests/test_parallel.py`.
 
 ## Reproducibility
 
